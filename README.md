@@ -3,6 +3,22 @@
 A private Windows desktop time tracker with manual work logs, a live timer,
 Pomodoro sessions, daily and weekly summaries, and an always-on-top companion.
 
+## Screenshots
+
+### Focus Buddy on the desktop
+
+| Expanded companion | Minimal companion |
+|:---:|:---:|
+| ![Expanded Focus Buddy floating over a desktop workspace](docs/screenshots/focus-buddy-expanded.png) | ![Minimal custom Focus Buddy floating over a desktop workspace](docs/screenshots/focus-buddy-collapsed.png) |
+
+### Dashboard
+
+| Today overview | Work ledger |
+|:---:|:---:|
+| ![Focus Hours today overview](docs/screenshots/overview.png) | ![Focus Hours work ledger](docs/screenshots/work-ledger.png) |
+| **Pomodoro** | **Companion settings** |
+| ![Focus Hours Pomodoro timer](docs/screenshots/pomodoro.png) | ![Focus Hours desktop companion settings](docs/screenshots/settings-companion.png) |
+
 ## Run locally
 
 ```powershell
