@@ -1,0 +1,52 @@
+{
+  "name": "focus-hours",
+  "version": "1.0.0",
+  "description": "A private desktop work-time tracker and Pomodoro companion.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/app.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "keywords": [
+    "time-tracker",
+    "pomodoro",
+    "productivity",
+    "electron"
+  ],
+  "author": "Shashi Kumar Singh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shashikrsingh786/focus-hours-desktop.git"
+  },
+  "homepage": "https://github.com/shashikrsingh786/focus-hours-desktop#readme",
+  "devDependencies": {
+    "electron": "^37.2.4",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.focushours.desktop",
+    "productName": "Focus Hours",
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
