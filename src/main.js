@@ -15,6 +15,7 @@ let widgetExpanded = false;
 let widgetNotesOpen = false;
 let widgetClickThrough = false;
 let widgetQuoteVisible = false;
+let widgetVideoVisible = false;
 let widgetQuotePlacement = { horizontal: "left", vertical: "up" };
 let lastQuoteIndex = -1;
 
@@ -26,6 +27,10 @@ const HALO_MIN_WIDTH = 150;
 const PET_PANEL_HEIGHT = 252;
 const NOTES_BLOCK = 214;
 const NOTEPAD_LIMIT = 4000;
+const PET_DROP_VIDEO_SIZE_MIN = 80;
+const PET_DROP_VIDEO_SIZE_MAX = 480;
+const PET_DROP_VIDEO_SIZE_DEFAULT = 280;
+const PET_DROP_VIDEO_MAX_BYTES = 40 * 1024 * 1024;
 
 const defaults = {
   sessions: [],
@@ -43,6 +48,9 @@ const defaults = {
     widgetDisplay: "pet",
     petStyle: "cat",
     customPetIcon: "",
+    petDropVideo: "",
+    petDropVideoSound: false,
+    petDropVideoSize: PET_DROP_VIDEO_SIZE_DEFAULT,
     buddySize: 62
   },
   pomodoroRound: 0
@@ -295,7 +303,8 @@ function createWidget() {
     y: display.y + 20,
     minWidth: BUDDY_SIZE_MIN + 14,
     minHeight: BUDDY_SIZE_MIN + 14,
-    maxHeight: PET_PANEL_HEIGHT + NOTES_BLOCK + 40,
+    maxWidth: Math.max(420, PET_DROP_VIDEO_SIZE_MAX + 24),
+    maxHeight: Math.max(PET_PANEL_HEIGHT + NOTES_BLOCK + 40, PET_DROP_VIDEO_SIZE_MAX + 24),
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -319,6 +328,10 @@ function createWidget() {
   widgetWindow.on("closed", () => {
     widgetWindow = null;
     widgetClickThrough = false;
+    widgetExpanded = false;
+    widgetNotesOpen = false;
+    widgetQuoteVisible = false;
+    widgetVideoVisible = false;
   });
 }
 
@@ -334,6 +347,13 @@ function widgetSize(expanded = widgetExpanded) {
   const mode = state?.settings?.widgetDisplay || "pet";
   const buddySize = state?.settings?.buddySize || 62;
   const buddyExtra = Math.max(0, buddySize - 62);
+  if (mode === "pet" && widgetVideoVisible && !expanded) {
+    const videoSize = Math.max(
+      PET_DROP_VIDEO_SIZE_MIN,
+      Math.min(PET_DROP_VIDEO_SIZE_MAX, Math.round(state?.settings?.petDropVideoSize || PET_DROP_VIDEO_SIZE_DEFAULT))
+    );
+    return { width: videoSize, height: videoSize };
+  }
   if (mode === "pet" && widgetQuoteVisible && !expanded) {
     return { width: 350 + buddyExtra, height: 152 + buddyExtra + HALO_BLOCK };
   }
@@ -358,10 +378,12 @@ function getVirtualDesktopBounds() {
 function resizeWidget(expanded = false, notesOpen = widgetNotesOpen) {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
   if (expanded && widgetQuoteVisible) resizeWidgetQuote(false);
+  if (expanded && widgetVideoVisible) resizeWidgetVideo(false);
   widgetExpanded = expanded;
   widgetNotesOpen = expanded ? Boolean(notesOpen) : false;
   if (expanded) {
     widgetQuoteVisible = false;
+    widgetVideoVisible = false;
     setWidgetClickThrough(false);
   }
   const current = widgetWindow.getBounds();
@@ -371,6 +393,24 @@ function resizeWidget(expanded = false, notesOpen = widgetNotesOpen) {
   widgetWindow.setBounds({
     x: Math.max(desktop.left, Math.min(right - next.width, desktop.right - next.width)),
     y: Math.max(desktop.top, Math.min(current.y, desktop.bottom - next.height)),
+    width: next.width,
+    height: next.height
+  }, true);
+}
+
+function resizeWidgetVideo(visible) {
+  if (!widgetWindow || widgetWindow.isDestroyed() || state.settings.widgetDisplay !== "pet" || widgetExpanded) return;
+  if (visible && widgetQuoteVisible) resizeWidgetQuote(false);
+  widgetVideoVisible = Boolean(visible);
+  if (visible) setWidgetClickThrough(false);
+  const current = widgetWindow.getBounds();
+  const next = widgetSize(false);
+  const desktop = getVirtualDesktopBounds();
+  const centerX = current.x + current.width / 2;
+  const centerY = current.y + current.height / 2;
+  widgetWindow.setBounds({
+    x: Math.max(desktop.left, Math.min(Math.round(centerX - next.width / 2), desktop.right - next.width)),
+    y: Math.max(desktop.top, Math.min(Math.round(centerY - next.height / 2), desktop.bottom - next.height)),
     width: next.width,
     height: next.height
   }, true);
@@ -559,8 +599,15 @@ ipcMain.handle("settings:update", (_event, settings) => {
   if (!["pet", "compact", "full"].includes(next.widgetDisplay)) next.widgetDisplay = "pet";
   if (!["cat", "owl", "sprout", "robot", "custom"].includes(next.petStyle)) next.petStyle = "cat";
   if (next.petStyle === "custom" && !next.customPetIcon) next.petStyle = "cat";
-  if (widgetQuoteVisible) resizeWidgetQuote(false);
-  else resizeWidget(false);
+  next.petDropVideo = typeof next.petDropVideo === "string" ? next.petDropVideo : "";
+  next.petDropVideoSound = Boolean(next.petDropVideoSound);
+  next.petDropVideoSize = Math.max(
+    PET_DROP_VIDEO_SIZE_MIN,
+    Math.min(PET_DROP_VIDEO_SIZE_MAX, Math.round(Number(next.petDropVideoSize) || PET_DROP_VIDEO_SIZE_DEFAULT))
+  );
+  if (widgetVideoVisible) resizeWidgetVideo(true);
+  else if (widgetQuoteVisible) resizeWidgetQuote(false);
+  else resizeWidget(widgetExpanded);
   persistState();
   broadcast();
   return state.settings;
@@ -578,6 +625,7 @@ ipcMain.handle("window:widget", (_event, visible) => {
 });
 ipcMain.handle("window:widget-expand", (_event, expanded, notesOpen) => resizeWidget(Boolean(expanded), notesOpen));
 ipcMain.handle("window:widget-quote", (_event, visible, placement) => resizeWidgetQuote(Boolean(visible), placement));
+ipcMain.handle("window:widget-video", (_event, visible) => resizeWidgetVideo(Boolean(visible)));
 ipcMain.handle("quote:random", () => {
   if (!motivationalQuotes.length) return null;
   let index = Math.floor(Math.random() * motivationalQuotes.length);
@@ -644,4 +692,57 @@ ipcMain.handle("pet:choose", async () => {
   broadcast();
   return state.settings.customPetIcon;
 });
+
+function clearStoredPetDropVideos(keepPath = "") {
+  const userDataPath = app.getPath("userData");
+  const dropVideoPattern = /^focus-hours-pet-drop(?:-[a-f0-9]{12})?\.(?:mp4|webm|mov)$/i;
+  const keep = keepPath ? path.resolve(keepPath) : "";
+  for (const fileName of fs.readdirSync(userDataPath)) {
+    if (!dropVideoPattern.test(fileName)) continue;
+    const oldFile = path.join(userDataPath, fileName);
+    if (keep && path.resolve(oldFile).toLowerCase() === keep.toLowerCase()) continue;
+    fs.rmSync(oldFile, { force: true });
+  }
+}
+
+ipcMain.handle("pet:choose-drop-video", async () => {
+  const options = {
+    title: "Choose a Focus Buddy drop video",
+    properties: ["openFile"],
+    filters: [{ name: "Videos", extensions: ["mp4", "webm", "mov"] }]
+  };
+  const result = dashboardWindow && !dashboardWindow.isDestroyed()
+    ? await dialog.showOpenDialog(dashboardWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const source = result.filePaths[0];
+  const extension = path.extname(source).toLowerCase();
+  if (![".mp4", ".webm", ".mov"].includes(extension)) throw new Error("Choose an MP4, WebM, or MOV video.");
+  if (fs.statSync(source).size > PET_DROP_VIDEO_MAX_BYTES) throw new Error("Choose a video smaller than 40 MB.");
+
+  const videoBuffer = fs.readFileSync(source);
+  const videoHash = crypto.createHash("sha256").update(videoBuffer).digest("hex").slice(0, 12);
+  const userDataPath = app.getPath("userData");
+  const destination = path.join(userDataPath, `focus-hours-pet-drop-${videoHash}${extension}`);
+  if (path.resolve(source).toLowerCase() !== path.resolve(destination).toLowerCase()) {
+    fs.writeFileSync(destination, videoBuffer);
+  }
+
+  clearStoredPetDropVideos(destination);
+  state.settings.petDropVideo = pathToFileURL(destination).href;
+  persistState();
+  broadcast();
+  return state.settings.petDropVideo;
+});
+
+ipcMain.handle("pet:clear-drop-video", () => {
+  clearStoredPetDropVideos();
+  state.settings.petDropVideo = "";
+  if (widgetVideoVisible) resizeWidgetVideo(false);
+  persistState();
+  broadcast();
+  return true;
+});
+
 ipcMain.handle("window:hide", (event) => BrowserWindow.fromWebContents(event.sender)?.hide());

@@ -1227,6 +1227,43 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .buddy-size-control { display: grid; gap: 8px; margin: 2px 0 17px; }
 .buddy-size-control > div:first-child { display: flex; gap: 3px; align-items: center; }
 .buddy-size-control > div:first-child > span { font-size: 11px; font-weight: 650; }
+.drop-video-control { display: grid; gap: 10px; margin: 0 0 17px; padding: 12px 12px 10px; border: 1px solid var(--line); border-radius: 12px; background: #fbfbfc; }
+.drop-video-control .pet-choice-heading { margin-bottom: 0; }
+.drop-video-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.drop-video-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
+.drop-video-control .toggle-row { margin: 2px 0 0; padding-top: 8px; border-top: 1px solid var(--line); }
+.drop-video-size-control { margin: 2px 0 0; }
+.pet-video-shell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--pet-video-size, 280px);
+  height: var(--pet-video-size, 280px);
+  overflow: visible;
+  background: transparent;
+  box-shadow: none;
+  cursor: grab;
+  animation: pet-video-in .22s cubic-bezier(.2,.8,.2,1);
+  -webkit-app-region: no-drag;
+}
+.pet-video-shell.dragging { cursor: grabbing; }
+.pet-drop-video {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.pet-drop-canvas {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  pointer-events: none;
+}
+@keyframes pet-video-in {
+  from { opacity: 0; transform: scale(.92); }
+  to { opacity: 1; transform: none; }
+}
 .buddy-size-control .icon-button { width: 26px; height: 26px; }
 .buddy-size-slider { display: grid; grid-template-columns: 12px minmax(0, 1fr) 18px 44px; gap: 10px; align-items: center; max-width: 470px; }
 .buddy-size-slider input { width: 100%; height: 4px; margin: 0; border-radius: 99px; outline: 0; background: #dddce7; accent-color: #6255df; cursor: pointer; }

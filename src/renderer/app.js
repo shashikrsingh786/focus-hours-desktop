@@ -4,6 +4,9 @@ const toastRegion = document.querySelector("#toast-region");
 const isWidget = new URLSearchParams(window.location.search).get("view") === "widget";
 const BUDDY_SIZE_MIN = 28;
 const BUDDY_SIZE_MAX = 180;
+const PET_DROP_VIDEO_SIZE_MIN = 80;
+const PET_DROP_VIDEO_SIZE_MAX = 480;
+const PET_DROP_VIDEO_SIZE_DEFAULT = 280;
 const HALO_BLOCK = 32;
 const HALO_MIN_WIDTH = 150;
 const NOTEPAD_LIMIT = 4000;
@@ -15,9 +18,13 @@ let historySearch = "";
 let historySource = "all";
 let historySearchTimer;
 let buddySizeTimer;
+let dropVideoSizeTimer;
 let notepadSaveTimer;
 let petOpen = false;
 let petNotesOpen = false;
+let petVideoPlaying = false;
+let petVideoFrameHandle = 0;
+let petVideoFrameTarget = null;
 let widgetInteractive = true;
 let widgetDragState = null;
 let motivationQuote = null;
@@ -133,6 +140,7 @@ function renderKey(state) {
       : null,
     petOpen,
     petNotesOpen,
+    petVideoPlaying,
     editingSessionId
   });
 }
@@ -527,6 +535,19 @@ function settingsPage() {
         <div><span>Focus Buddy size</span><button type="button" class="icon-button info" title="Adjusts the collapsed companion icon. The expanded overview keeps its carefully spaced layout.">${icon("info", 16)}</button></div>
         <div class="buddy-size-slider"><span class="size-dot small"></span><input id="buddy-size" name="buddySize" type="range" min="${BUDDY_SIZE_MIN}" max="${BUDDY_SIZE_MAX}" step="2" value="${s.buddySize || 62}"/><span class="size-dot large"></span><output id="buddy-size-output">${s.buddySize || 62}px</output></div>
       </label>
+      <div class="drop-video-control">
+        <div class="pet-choice-heading"><span>Drop animation video</span><button type="button" class="icon-button info" title="When you drag and drop the Focus Buddy, this video plays once, then the buddy returns.">${icon("info", 16)}</button></div>
+        <div class="drop-video-row">
+          <button type="button" class="button secondary" data-action="choose-drop-video">${s.petDropVideo ? "Change video" : "Choose video"}</button>
+          ${s.petDropVideo ? `<button type="button" class="button danger-outline" data-action="clear-drop-video">Remove</button>` : ""}
+        </div>
+        <p class="drop-video-status">${s.petDropVideo ? `Ready: ${escapeHtml(petDropVideoLabel(s.petDropVideo))}` : "No video selected — drop will only move the buddy."}</p>
+        <label class="buddy-size-control drop-video-size-control">
+          <div><span>Drop video size</span><button type="button" class="icon-button info" title="Independent from Focus Buddy size. Use this if the drop clip looks smaller or larger than your companion.">${icon("info", 16)}</button></div>
+          <div class="buddy-size-slider"><span class="size-dot small"></span><input id="drop-video-size" name="petDropVideoSize" type="range" min="${PET_DROP_VIDEO_SIZE_MIN}" max="${PET_DROP_VIDEO_SIZE_MAX}" step="10" value="${clampPetDropVideoSize(s.petDropVideoSize)}"/><span class="size-dot large"></span><output id="drop-video-size-output">${clampPetDropVideoSize(s.petDropVideoSize)}px</output></div>
+        </label>
+        ${toggleField("petDropVideoSound", "Play video sound", "Allow audio when the drop animation plays. Leave off to keep drops silent.", Boolean(s.petDropVideoSound))}
+      </div>
       ${toggleField("alwaysOnTop", "Keep mini timer above other apps", "The compact timer stays visible over your current window.", s.alwaysOnTop)}
       ${toggleField("launchWidget", "Show mini timer on launch", "Open the compact timer when Focus Hours starts.", s.launchWidget)}
       <button type="button" class="button secondary widget-preview" data-action="show-widget">${icon("external", 18)} Show mini timer now</button>
@@ -744,7 +765,82 @@ function haloTime() {
   return formatClock(tracker.remainingMs ?? tracker.elapsedMs);
 }
 
+function clampPetDropVideoSize(value) {
+  const size = Math.round(Number(value) || PET_DROP_VIDEO_SIZE_DEFAULT);
+  return Math.max(PET_DROP_VIDEO_SIZE_MIN, Math.min(PET_DROP_VIDEO_SIZE_MAX, size));
+}
+
+function petDropVideoLabel(url) {
+  try {
+    const name = decodeURIComponent(String(url).split(/[/\\]/).pop() || "");
+    return name.replace(/^focus-hours-pet-drop-[a-f0-9]{12}\./i, "drop.") || "drop video";
+  } catch {
+    return "drop video";
+  }
+}
+
+function petDropVideoShell() {
+  const src = appState.settings.petDropVideo;
+  const muted = !appState.settings.petDropVideoSound;
+  const size = clampPetDropVideoSize(appState.settings.petDropVideoSize);
+  return `<div class="pet-video-shell" data-pet-video="true" style="width:${size}px;height:${size}px">
+    <video class="pet-drop-video" src="${escapeHtml(src)}" ${muted ? "muted" : ""} playsinline disablepictureinpicture controlslist="nodownload nofullscreen noremoteplayback" aria-label="Focus Buddy drop animation"></video>
+    <canvas class="pet-drop-canvas" width="${size}" height="${size}" aria-hidden="true"></canvas>
+  </div>`;
+}
+
+// Many “transparent” WebMs are actually opaque with a checkerboard baked into RGB.
+// Flood-fill gray board pixels from the edges so the subject floats over the desktop.
+function punchCheckerboardBackground(imageData) {
+  const { data, width, height } = imageData;
+  const marked = new Uint8Array(width * height);
+  const stack = [];
+
+  const isBoardPixel = (index) => {
+    const r = data[index];
+    const g = data[index + 1];
+    const b = data[index + 2];
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    if (max - min > 18) return false;
+    return max >= 135 && max <= 250;
+  };
+
+  const push = (x, y) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const pixel = y * width + x;
+    if (marked[pixel]) return;
+    if (!isBoardPixel(pixel * 4)) return;
+    marked[pixel] = 1;
+    stack.push(pixel);
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    push(x, 0);
+    push(x, height - 1);
+  }
+  for (let y = 0; y < height; y += 1) {
+    push(0, y);
+    push(width - 1, y);
+  }
+
+  while (stack.length) {
+    const pixel = stack.pop();
+    const x = pixel % width;
+    const y = (pixel / width) | 0;
+    push(x + 1, y);
+    push(x - 1, y);
+    push(x, y + 1);
+    push(x, y - 1);
+  }
+
+  for (let pixel = 0; pixel < marked.length; pixel += 1) {
+    if (marked[pixel]) data[pixel * 4 + 3] = 0;
+  }
+}
+
 function petDock(petStyle) {
+  if (petVideoPlaying && appState.settings.petDropVideo) return petDropVideoShell();
   const tracker = appState.tracker;
   const paused = trackerIsPaused();
   const state = !tracker ? "idle" : paused ? "paused" : "live";
@@ -796,6 +892,7 @@ function widgetView() {
   const paused = trackerIsPaused();
 
   if (mode === "pet" && !petOpen) {
+    if (petVideoPlaying) return petDock(petStyle);
     if (motivationQuote) {
       return `<div class="quote-companion-shell quote-${quotePlacement.horizontal} quote-${quotePlacement.vertical}">
         <aside class="motivation-bubble" aria-live="polite">
@@ -876,6 +973,15 @@ function render(force = false) {
     syncNotepadField();
     return;
   }
+  // Keep the drop video mounted so state broadcasts do not restart playback mid-clip.
+  if (isWidget && petVideoPlaying && !force && document.querySelector("[data-pet-video='true']")) {
+    const video = document.querySelector(".pet-drop-video");
+    if (video) video.muted = !appState.settings.petDropVideoSound;
+    syncPetDropVideoSize();
+    lastRenderKey = key;
+    updateDynamic();
+    return;
+  }
   lastRenderKey = key;
   document.body.classList.toggle("widget-body", isWidget);
   document.documentElement.classList.toggle("widget-html", isWidget);
@@ -883,9 +989,11 @@ function render(force = false) {
     const buddySize = Math.max(BUDDY_SIZE_MIN, Math.min(BUDDY_SIZE_MAX, appState.settings.buddySize || 62));
     document.documentElement.style.setProperty("--buddy-scale", String(buddySize / 62));
     document.documentElement.style.setProperty("--buddy-extra", `${Math.max(0, buddySize - 62)}px`);
+    syncPetDropVideoSize();
     const typing = captureWidgetTyping();
     appRoot.innerHTML = widgetView();
     restoreWidgetTyping(typing);
+    if (petVideoPlaying) bindPetDropVideo();
     return;
   }
   appRoot.innerHTML = currentPage === "overview"
@@ -966,7 +1074,7 @@ function scheduleMotivationQuote(initial = false) {
 }
 
 async function showMotivationQuote() {
-  if (petOpen || motivationQuote || appState.settings.widgetDisplay !== "pet") {
+  if (petOpen || petVideoPlaying || motivationQuote || appState.settings.widgetDisplay !== "pet") {
     scheduleMotivationQuote(false);
     return;
   }
@@ -1006,6 +1114,134 @@ function dismissMotivationQuote(scheduleNext = true) {
   render(true);
   api.setQuoteVisible(false);
   if (scheduleNext) scheduleMotivationQuote(false);
+}
+
+async function startPetDropVideo() {
+  if (!isWidget || petOpen || petVideoPlaying || !appState.settings.petDropVideo) return;
+  if (motivationQuote) dismissMotivationQuote(false);
+  petVideoPlaying = true;
+  widgetInteractive = true;
+  lastRenderKey = "";
+  render(true);
+  try {
+    await api.setWidgetVideo(true);
+  } catch (error) {
+    petVideoPlaying = false;
+    lastRenderKey = "";
+    render(true);
+    showToast(error.message || "Could not play drop video", "error");
+  }
+}
+
+function syncPetDropVideoSize() {
+  const size = clampPetDropVideoSize(appState.settings.petDropVideoSize);
+  document.documentElement.style.setProperty("--pet-video-size", `${size}px`);
+  const shell = document.querySelector(".pet-video-shell");
+  if (shell) {
+    shell.style.width = `${size}px`;
+    shell.style.height = `${size}px`;
+  }
+  const canvas = document.querySelector(".pet-drop-canvas");
+  if (canvas && (canvas.width !== size || canvas.height !== size)) {
+    canvas.width = size;
+    canvas.height = size;
+  }
+}
+
+function stopPetDropVideoLoop() {
+  if (!petVideoFrameHandle) return;
+  if (petVideoFrameTarget?.cancelVideoFrameCallback) {
+    try { petVideoFrameTarget.cancelVideoFrameCallback(petVideoFrameHandle); } catch {}
+  } else {
+    cancelAnimationFrame(petVideoFrameHandle);
+  }
+  petVideoFrameHandle = 0;
+  petVideoFrameTarget = null;
+}
+
+function paintPetDropVideoFrame(video, canvas) {
+  if (!video.videoWidth || !video.videoHeight) return;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true, alpha: true });
+  if (!ctx) return;
+  const width = canvas.width;
+  const height = canvas.height;
+  const scale = Math.min(width / video.videoWidth, height / video.videoHeight);
+  const drawW = Math.max(1, Math.round(video.videoWidth * scale));
+  const drawH = Math.max(1, Math.round(video.videoHeight * scale));
+  const dx = Math.round((width - drawW) / 2);
+  const dy = Math.round((height - drawH) / 2);
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(video, dx, dy, drawW, drawH);
+  const frame = ctx.getImageData(0, 0, width, height);
+  punchCheckerboardBackground(frame);
+  ctx.putImageData(frame, 0, 0);
+}
+
+function bindPetDropVideo() {
+  const video = document.querySelector(".pet-drop-video");
+  const canvas = document.querySelector(".pet-drop-canvas");
+  if (!video || !canvas) {
+    endPetDropVideo();
+    return;
+  }
+  stopPetDropVideoLoop();
+  video.muted = !appState.settings.petDropVideoSound;
+  const finish = () => endPetDropVideo();
+  video.addEventListener("ended", finish, { once: true });
+  video.addEventListener("error", finish, { once: true });
+
+  const schedule = () => {
+    if (!petVideoPlaying) return;
+    if (typeof video.requestVideoFrameCallback === "function") {
+      petVideoFrameTarget = video;
+      petVideoFrameHandle = video.requestVideoFrameCallback(() => {
+        if (!petVideoPlaying) return;
+        paintPetDropVideoFrame(video, canvas);
+        schedule();
+      });
+      return;
+    }
+    petVideoFrameTarget = null;
+    petVideoFrameHandle = requestAnimationFrame(() => {
+      if (!petVideoPlaying) return;
+      paintPetDropVideoFrame(video, canvas);
+      schedule();
+    });
+  };
+
+  const startPlayback = () => {
+    schedule();
+  };
+
+  video.play().then(startPlayback).catch(() => {
+    // Autoplay with sound can be blocked; retry muted so the clip still finishes.
+    if (!video.muted) {
+      video.muted = true;
+      video.play().then(startPlayback).catch(finish);
+      return;
+    }
+    finish();
+  });
+}
+
+async function endPetDropVideo() {
+  if (!petVideoPlaying && !petVideoFrameHandle) return;
+  stopPetDropVideoLoop();
+  const video = document.querySelector(".pet-drop-video");
+  if (video) {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  }
+  if (!petVideoPlaying) return;
+  petVideoPlaying = false;
+  lastRenderKey = "";
+  render(true);
+  try {
+    await api.setWidgetVideo(false);
+  } catch {
+    // Window restore is best-effort; the pet is already back in the DOM.
+  }
 }
 
 function toDateTimeLocal(timestamp) {
@@ -1124,6 +1360,15 @@ document.addEventListener("click", async (event) => {
       const chosen = await api.chooseCustomPet();
       if (chosen) showToast("Custom focus buddy applied");
     }
+    if (target.dataset.action === "choose-drop-video") {
+      const chosen = await api.choosePetDropVideo();
+      if (chosen) showToast("Drop animation video ready");
+    }
+    if (target.dataset.action === "clear-drop-video") {
+      if (petVideoPlaying) await endPetDropVideo();
+      await api.clearPetDropVideo();
+      showToast("Drop animation video removed");
+    }
     if (target.dataset.action === "confirm-data-reset" && pendingDeletionRange) {
       const range = pendingDeletionRange;
       const result = await api.deleteSessionsInRange(range);
@@ -1158,6 +1403,16 @@ document.addEventListener("input", (event) => {
     }, 120);
     return;
   }
+  if (event.target.id === "drop-video-size") {
+    const value = clampPetDropVideoSize(event.target.value);
+    const output = document.querySelector("#drop-video-size-output");
+    if (output) output.textContent = `${value}px`;
+    clearTimeout(dropVideoSizeTimer);
+    dropVideoSizeTimer = setTimeout(() => {
+      api.updateSettings({ petDropVideoSize: value }).catch((error) => showToast(error.message || "Could not resize drop video", "error"));
+    }, 120);
+    return;
+  }
   if (event.target.id !== "history-search") return;
   historySearch = event.target.value;
   clearTimeout(historySearchTimer);
@@ -1188,10 +1443,19 @@ document.addEventListener("change", async (event) => {
     } catch (error) {
       showToast(error.message || "Could not apply that choice", "error");
     }
+    return;
+  }
+  if (event.target.name === "petDropVideoSound") {
+    try {
+      await api.updateSettings({ petDropVideoSound: event.target.checked });
+      showToast(event.target.checked ? "Drop video sound on" : "Drop video sound off");
+    } catch (error) {
+      showToast(error.message || "Could not update sound setting", "error");
+    }
   }
 });
 
-const WIDGET_HIT_AREAS = ".pet-orb, .pet-halo, .pet-panel, .motivation-bubble, .compact-widget, .widget-shell";
+const WIDGET_HIT_AREAS = ".pet-orb, .pet-halo, .pet-panel, .pet-video-shell, .motivation-bubble, .compact-widget, .widget-shell";
 const WIDGET_DRAG_BLOCKERS = "button, input, textarea, select, a, label, [contenteditable='true']";
 
 async function collapsePetPanel() {
@@ -1225,6 +1489,11 @@ function beginWidgetDrag(event, el, kind) {
 
 document.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) return;
+  if (petVideoPlaying) {
+    const shell = event.target.closest(".pet-video-shell");
+    if (shell) beginWidgetDrag(event, shell, "surface");
+    return;
+  }
   const pet = event.target.closest('.pet-orb[data-pet-trigger="true"]');
   if (pet) {
     beginWidgetDrag(event, pet, "pet");
@@ -1263,7 +1532,11 @@ function finishWidgetDrag(event, cancelled = false) {
   el.classList.remove("dragging");
   el.releasePointerCapture?.(event.pointerId);
   widgetDragState = null;
-  if (kind !== "pet" || cancelled || moved) return;
+  if (kind !== "pet" || cancelled) return;
+  if (moved) {
+    if (appState.settings.petDropVideo) startPetDropVideo();
+    return;
+  }
   if (motivationQuote) dismissMotivationQuote(false);
   petOpen = true;
   widgetInteractive = true;
@@ -1304,6 +1577,11 @@ if (isWidget) {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && document.querySelector(".modal-backdrop")) closeModal();
+  if (event.key === "Escape" && isWidget && petVideoPlaying) {
+    event.preventDefault();
+    endPetDropVideo();
+    return;
+  }
   if (event.key === "Escape" && isWidget && petOpen) {
     event.preventDefault();
     collapsePetPanel();
@@ -1345,13 +1623,12 @@ document.addEventListener("submit", async (event) => {
         dailyGoalHours: Number(values.dailyGoalHours),
         autoStartBreaks: form.autoStartBreaks.checked,
         alwaysOnTop: form.alwaysOnTop.checked,
-        launchWidget: form.launchWidget.checked
-        ,
-        widgetDisplay: values.widgetDisplay
-        ,
-        petStyle: values.petStyle || appState.settings.petStyle
-        ,
-        buddySize: Number(values.buddySize)
+        launchWidget: form.launchWidget.checked,
+        widgetDisplay: values.widgetDisplay,
+        petStyle: values.petStyle || appState.settings.petStyle,
+        buddySize: Number(values.buddySize),
+        petDropVideoSize: clampPetDropVideoSize(values.petDropVideoSize),
+        petDropVideoSound: form.petDropVideoSound?.checked || false
       });
       showToast("Preferences saved");
     }
@@ -1365,15 +1642,25 @@ async function init() {
   render(true);
   api.onStateChanged((next) => {
     const previousWidgetDisplay = appState?.settings?.widgetDisplay;
+    const previousDropVideo = appState?.settings?.petDropVideo;
     const settingsChanged = JSON.stringify(appState?.settings) !== JSON.stringify(next.settings);
     appState = next;
     if (isWidget && settingsChanged && motivationQuote) dismissMotivationQuote(false);
+    if (isWidget && petVideoPlaying && !next.settings.petDropVideo) {
+      endPetDropVideo();
+      return;
+    }
     if (isWidget && previousWidgetDisplay !== next.settings.widgetDisplay) {
       petOpen = false;
+      if (petVideoPlaying) endPetDropVideo();
       if (motivationQuote) dismissMotivationQuote(false);
       scheduleMotivationQuote(false);
     }
-    if (!isWidget && document.activeElement?.id === "buddy-size") {
+    if (isWidget && petVideoPlaying && previousDropVideo && previousDropVideo !== next.settings.petDropVideo) {
+      endPetDropVideo();
+      return;
+    }
+    if (!isWidget && (document.activeElement?.id === "buddy-size" || document.activeElement?.id === "drop-video-size")) {
       lastRenderKey = renderKey(appState);
       return;
     }

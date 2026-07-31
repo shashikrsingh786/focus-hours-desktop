@@ -16,10 +16,13 @@ contextBridge.exposeInMainWorld("focusHours", {
   setWidgetVisible: (visible) => ipcRenderer.invoke("window:widget", visible),
   setWidgetExpanded: (expanded, notesOpen) => ipcRenderer.invoke("window:widget-expand", expanded, notesOpen),
   setQuoteVisible: (visible, placement) => ipcRenderer.invoke("window:widget-quote", visible, placement),
+  setWidgetVideo: (visible) => ipcRenderer.invoke("window:widget-video", visible),
   getMotivationalQuote: () => ipcRenderer.invoke("quote:random"),
   moveWidgetBy: (x, y) => ipcRenderer.send("window:widget-move", { x, y }),
   setWidgetInteractive: (interactive) => ipcRenderer.send("window:widget-interactive", interactive),
   chooseCustomPet: () => ipcRenderer.invoke("pet:choose"),
+  choosePetDropVideo: () => ipcRenderer.invoke("pet:choose-drop-video"),
+  clearPetDropVideo: () => ipcRenderer.invoke("pet:clear-drop-video"),
   hideWindow: () => ipcRenderer.invoke("window:hide"),
   onStateChanged: (callback) => {
     const listener = (_event, value) => callback(value);
