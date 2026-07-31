@@ -12,14 +12,24 @@ let tickTimer;
 let state;
 let dataFile;
 let widgetExpanded = false;
+let widgetNotesOpen = false;
+let widgetClickThrough = false;
 let widgetQuoteVisible = false;
+let widgetQuotePlacement = { horizontal: "left", vertical: "up" };
 let lastQuoteIndex = -1;
 
 const BUDDY_SIZE_MIN = 28;
 const BUDDY_SIZE_MAX = 180;
+// Vertical room the always-visible time/pause pill takes above the collapsed buddy.
+const HALO_BLOCK = 32;
+const HALO_MIN_WIDTH = 150;
+const PET_PANEL_HEIGHT = 252;
+const NOTES_BLOCK = 214;
+const NOTEPAD_LIMIT = 4000;
 
 const defaults = {
   sessions: [],
+  notepad: "",
   tracker: null,
   settings: {
     workMinutes: 25,
@@ -46,11 +56,20 @@ function loadState() {
       ...structuredClone(defaults),
       ...saved,
       settings: { ...defaults.settings, ...(saved.settings || {}) },
-      sessions: Array.isArray(saved.sessions) ? saved.sessions : []
+      sessions: Array.isArray(saved.sessions) ? saved.sessions : [],
+      notepad: typeof saved.notepad === "string" ? saved.notepad.slice(0, NOTEPAD_LIMIT) : "",
+      tracker: normalizeTracker(saved.tracker)
     };
   } catch {
     return structuredClone(defaults);
   }
+}
+
+// Trackers saved before pause support only had startedAt, so treat them as one running segment.
+function normalizeTracker(tracker) {
+  if (!tracker) return null;
+  if (Number.isFinite(tracker.segmentStartedAt) || tracker.pausedAt) return tracker;
+  return { ...tracker, segmentStartedAt: tracker.startedAt, accumulatedMs: 0, pausedAt: null };
 }
 
 function persistState() {
@@ -68,8 +87,9 @@ function snapshot() {
     (sum, session) => sum + Math.max(0, Math.min(session.endedAt, now) - Math.max(session.startedAt, dayStart)),
     0
   );
-  if (state.tracker && state.tracker.kind !== "break") {
-    todayTotalMs += Math.max(0, now - Math.max(state.tracker.startedAt, dayStart));
+  // Finished segments are already stored as sessions, so only the live segment is added here.
+  if (state.tracker && state.tracker.kind !== "break" && state.tracker.segmentStartedAt) {
+    todayTotalMs += Math.max(0, now - Math.max(state.tracker.segmentStartedAt, dayStart));
   }
   return {
     ...state,
@@ -79,15 +99,23 @@ function snapshot() {
     tracker: state.tracker
       ? {
           ...state.tracker,
-          elapsedMs: Math.max(0, now - state.tracker.startedAt),
-          remainingMs: state.tracker.endsAt ? Math.max(0, state.tracker.endsAt - now) : null
+          elapsedMs: trackerElapsed(state.tracker, now),
+          remainingMs: state.tracker.endsAt
+            ? Math.max(0, state.tracker.endsAt - (state.tracker.pausedAt ?? now))
+            : null
         }
       : null
   };
 }
 
+function trackerElapsed(tracker, now = Date.now()) {
+  const live = tracker.segmentStartedAt ? Math.max(0, now - tracker.segmentStartedAt) : 0;
+  return Math.max(0, (tracker.accumulatedMs || 0) + live);
+}
+
 function broadcast() {
   const current = snapshot();
+  refreshTrayMenu();
   if (dashboardWindow && !dashboardWindow.isDestroyed()) dashboardWindow.webContents.send("state:changed", current);
   if (widgetWindow && !widgetWindow.isDestroyed()) {
     widgetWindow.webContents.send("state:changed", { ...current, sessions: [] });
@@ -125,23 +153,60 @@ function createSession({ startedAt, endedAt, task = "", project = "", note = "",
   return session;
 }
 
+// Records the segment that is currently running. Paused spans are never part of a segment,
+// so the work ledger stays truthful without any duration bookkeeping.
+function saveTrackerSegment(tracker, endedAt) {
+  if (tracker.kind === "break" || !tracker.segmentStartedAt || endedAt <= tracker.segmentStartedAt) return false;
+  createSession({
+    startedAt: tracker.segmentStartedAt,
+    endedAt,
+    task: tracker.task,
+    project: tracker.project,
+    source: tracker.kind === "pomodoro" ? "pomodoro" : "timer"
+  });
+  return true;
+}
+
+function saveNotepad(text) {
+  state.notepad = String(text ?? "").slice(0, NOTEPAD_LIMIT);
+  persistState();
+  broadcast();
+  return state.notepad;
+}
+
 function stopTracker(save = true) {
   if (!state.tracker) return;
   const tracker = state.tracker;
   const endedAt = tracker.endsAt ? Math.min(Date.now(), tracker.endsAt) : Date.now();
   state.tracker = null;
-  if (save && tracker.kind !== "break" && endedAt > tracker.startedAt) {
-    createSession({
-      startedAt: tracker.startedAt,
-      endedAt,
-      task: tracker.task,
-      project: tracker.project,
-      source: tracker.kind === "pomodoro" ? "pomodoro" : "timer"
-    });
-  } else {
-    persistState();
-    broadcast();
-  }
+  if (save && saveTrackerSegment(tracker, endedAt)) return;
+  persistState();
+  broadcast();
+}
+
+function pauseTracker() {
+  const tracker = state.tracker;
+  if (!tracker || tracker.pausedAt) return;
+  const now = Date.now();
+  const endedAt = tracker.endsAt ? Math.min(now, tracker.endsAt) : now;
+  tracker.accumulatedMs = trackerElapsed(tracker, now);
+  tracker.pausedAt = now;
+  const segmentStartedAt = tracker.segmentStartedAt;
+  tracker.segmentStartedAt = null;
+  if (saveTrackerSegment({ ...tracker, segmentStartedAt }, endedAt)) return;
+  persistState();
+  broadcast();
+}
+
+function resumeTracker() {
+  const tracker = state.tracker;
+  if (!tracker || !tracker.pausedAt) return;
+  const now = Date.now();
+  if (tracker.endsAt) tracker.endsAt += now - tracker.pausedAt;
+  tracker.pausedAt = null;
+  tracker.segmentStartedAt = now;
+  persistState();
+  broadcast();
 }
 
 function startTracker(payload) {
@@ -154,6 +219,9 @@ function startTracker(payload) {
     task: String(payload.task || "").trim().slice(0, 120),
     project: String(payload.project || "").trim().slice(0, 80),
     startedAt: now,
+    segmentStartedAt: now,
+    accumulatedMs: 0,
+    pausedAt: null,
     endsAt: kind === "pomodoro" ? now + state.settings.workMinutes * 60_000 : null
   };
   persistState();
@@ -162,16 +230,10 @@ function startTracker(payload) {
 
 function handleTimerCompletion() {
   const tracker = state.tracker;
-  if (!tracker?.endsAt || Date.now() < tracker.endsAt) return false;
+  if (!tracker?.endsAt || tracker.pausedAt || Date.now() < tracker.endsAt) return false;
 
   if (tracker.kind === "pomodoro" && tracker.phase === "focus") {
-    createSession({
-      startedAt: tracker.startedAt,
-      endedAt: tracker.endsAt,
-      task: tracker.task,
-      project: tracker.project,
-      source: "pomodoro"
-    });
+    saveTrackerSegment(tracker, tracker.endsAt);
     state.pomodoroRound += 1;
     const longBreak = state.pomodoroRound % state.settings.roundsBeforeLongBreak === 0;
     const breakMinutes = longBreak ? state.settings.longBreakMinutes : state.settings.shortBreakMinutes;
@@ -181,6 +243,9 @@ function handleTimerCompletion() {
           phase: longBreak ? "long-break" : "short-break",
           task: tracker.task,
           startedAt: Date.now(),
+          segmentStartedAt: Date.now(),
+          accumulatedMs: 0,
+          pausedAt: null,
           endsAt: Date.now() + breakMinutes * 60_000
         }
       : null;
@@ -230,7 +295,7 @@ function createWidget() {
     y: display.y + 20,
     minWidth: BUDDY_SIZE_MIN + 14,
     minHeight: BUDDY_SIZE_MIN + 14,
-    maxHeight: 300,
+    maxHeight: PET_PANEL_HEIGHT + NOTES_BLOCK + 40,
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -250,17 +315,33 @@ function createWidget() {
     query: { view: "widget" }
   });
   widgetWindow.once("ready-to-show", () => widgetWindow.showInactive());
+  widgetClickThrough = false;
   widgetWindow.on("closed", () => {
     widgetWindow = null;
+    widgetClickThrough = false;
   });
+}
+
+// The companion window is larger than the visuals it holds, so anything the buddy does not
+// cover forwards clicks to whatever app sits underneath.
+function setWidgetClickThrough(enabled) {
+  if (!widgetWindow || widgetWindow.isDestroyed() || widgetClickThrough === enabled) return;
+  widgetClickThrough = enabled;
+  widgetWindow.setIgnoreMouseEvents(enabled, { forward: true });
 }
 
 function widgetSize(expanded = widgetExpanded) {
   const mode = state?.settings?.widgetDisplay || "pet";
   const buddySize = state?.settings?.buddySize || 62;
   const buddyExtra = Math.max(0, buddySize - 62);
-  if (mode === "pet" && widgetQuoteVisible && !expanded) return { width: 350 + buddyExtra, height: 152 + buddyExtra };
-  if (mode === "pet") return expanded ? { width: 392, height: 194 } : { width: buddySize + 14, height: buddySize + 14 };
+  if (mode === "pet" && widgetQuoteVisible && !expanded) {
+    return { width: 350 + buddyExtra, height: 152 + buddyExtra + HALO_BLOCK };
+  }
+  if (mode === "pet") {
+    return expanded
+      ? { width: 392, height: PET_PANEL_HEIGHT + (widgetNotesOpen ? NOTES_BLOCK : 0) }
+      : { width: Math.max(buddySize + 14, HALO_MIN_WIDTH), height: buddySize + 14 + HALO_BLOCK };
+  }
   if (mode === "compact") return { width: 270, height: 84 };
   return { width: 330, height: 126 };
 }
@@ -274,10 +355,15 @@ function getVirtualDesktopBounds() {
   }), { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity });
 }
 
-function resizeWidget(expanded = false) {
+function resizeWidget(expanded = false, notesOpen = widgetNotesOpen) {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
+  if (expanded && widgetQuoteVisible) resizeWidgetQuote(false);
   widgetExpanded = expanded;
-  if (expanded) widgetQuoteVisible = false;
+  widgetNotesOpen = expanded ? Boolean(notesOpen) : false;
+  if (expanded) {
+    widgetQuoteVisible = false;
+    setWidgetClickThrough(false);
+  }
   const current = widgetWindow.getBounds();
   const next = widgetSize(expanded);
   const desktop = getVirtualDesktopBounds();
@@ -290,17 +376,25 @@ function resizeWidget(expanded = false) {
   }, true);
 }
 
-function resizeWidgetQuote(visible) {
+function resizeWidgetQuote(visible, placement = widgetQuotePlacement) {
   if (!widgetWindow || widgetWindow.isDestroyed() || state.settings.widgetDisplay !== "pet" || widgetExpanded) return;
+  const resolvedPlacement = {
+    horizontal: placement?.horizontal === "right" ? "right" : "left",
+    vertical: placement?.vertical === "down" ? "down" : "up"
+  };
+  if (visible) widgetQuotePlacement = resolvedPlacement;
+  const activePlacement = visible ? resolvedPlacement : widgetQuotePlacement;
+  const wasVisible = widgetQuoteVisible;
   widgetQuoteVisible = Boolean(visible);
   const current = widgetWindow.getBounds();
   const next = widgetSize(false);
-  const desktop = getVirtualDesktopBounds();
-  const right = current.x + current.width;
-  const bottom = current.y + current.height;
   widgetWindow.setBounds({
-    x: Math.max(desktop.left, Math.min(right - next.width, desktop.right - next.width)),
-    y: Math.max(desktop.top, Math.min(bottom - next.height, desktop.bottom - next.height)),
+    x: activePlacement.horizontal === "left" && (visible || wasVisible)
+      ? current.x + current.width - next.width
+      : current.x,
+    y: activePlacement.vertical === "up" && (visible || wasVisible)
+      ? current.y + current.height - next.height
+      : current.y,
     width: next.width,
     height: next.height
   }, true);
@@ -322,6 +416,11 @@ function showDashboard(action) {
 function registerProductivityShortcuts() {
   const shortcuts = [
     ["CommandOrControl+Alt+Space", () => state.tracker ? stopTracker(true) : startTracker({ kind: "timer" })],
+    ["CommandOrControl+Alt+K", () => {
+      if (!state.tracker) startTracker({ kind: "timer" });
+      else if (state.tracker.pausedAt) resumeTracker();
+      else pauseTracker();
+    }],
     ["CommandOrControl+Alt+P", () => startTracker({ kind: "pomodoro" })],
     ["CommandOrControl+Alt+F", () => showDashboard()],
     ["CommandOrControl+Alt+L", () => showDashboard("manual-log")],
@@ -334,10 +433,8 @@ function registerProductivityShortcuts() {
   for (const [accelerator, handler] of shortcuts) globalShortcut.register(accelerator, handler);
 }
 
-function createTray() {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect rx="9" width="32" height="32" fill="#635bff"/><circle cx="16" cy="17" r="9" fill="none" stroke="white" stroke-width="2.5"/><path d="M16 11v6l4 2M12 5h8" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>`;
-  tray = new Tray(nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`));
-  tray.setToolTip("Focus Hours");
+function refreshTrayMenu() {
+  if (!tray || tray.isDestroyed()) return;
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Open Focus Hours", click: () => showDashboard() },
@@ -349,6 +446,11 @@ function createTray() {
         }
       },
       { type: "separator" },
+      {
+        label: state.tracker?.pausedAt ? "Resume timer" : "Pause timer",
+        enabled: Boolean(state.tracker),
+        click: () => (state.tracker?.pausedAt ? resumeTracker() : pauseTracker())
+      },
       {
         label: "Stop current timer",
         enabled: Boolean(state.tracker),
@@ -364,7 +466,14 @@ function createTray() {
       }
     ])
   );
+}
+
+function createTray() {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect rx="9" width="32" height="32" fill="#635bff"/><circle cx="16" cy="17" r="9" fill="none" stroke="white" stroke-width="2.5"/><path d="M16 11v6l4 2M12 5h8" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+  tray = new Tray(nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`));
+  tray.setToolTip("Focus Hours");
   tray.on("double-click", () => showDashboard());
+  refreshTrayMenu();
 }
 
 app.whenReady().then(() => {
@@ -436,6 +545,9 @@ ipcMain.handle("session:delete-range", (_event, payload) => {
 });
 ipcMain.handle("tracker:start", (_event, payload) => startTracker(payload));
 ipcMain.handle("tracker:stop", (_event, save) => stopTracker(save));
+ipcMain.handle("tracker:pause", () => pauseTracker());
+ipcMain.handle("tracker:resume", () => resumeTracker());
+ipcMain.handle("notepad:save", (_event, text) => saveNotepad(text));
 ipcMain.handle("settings:update", (_event, settings) => {
   const numeric = ["workMinutes", "shortBreakMinutes", "longBreakMinutes", "roundsBeforeLongBreak", "dailyGoalHours", "buddySize"];
   const next = { ...state.settings, ...settings };
@@ -447,8 +559,8 @@ ipcMain.handle("settings:update", (_event, settings) => {
   if (!["pet", "compact", "full"].includes(next.widgetDisplay)) next.widgetDisplay = "pet";
   if (!["cat", "owl", "sprout", "robot", "custom"].includes(next.petStyle)) next.petStyle = "cat";
   if (next.petStyle === "custom" && !next.customPetIcon) next.petStyle = "cat";
-  widgetQuoteVisible = false;
-  resizeWidget(false);
+  if (widgetQuoteVisible) resizeWidgetQuote(false);
+  else resizeWidget(false);
   persistState();
   broadcast();
   return state.settings;
@@ -464,8 +576,8 @@ ipcMain.handle("window:widget", (_event, visible) => {
     widgetWindow?.hide();
   }
 });
-ipcMain.handle("window:widget-expand", (_event, expanded) => resizeWidget(Boolean(expanded)));
-ipcMain.handle("window:widget-quote", (_event, visible) => resizeWidgetQuote(Boolean(visible)));
+ipcMain.handle("window:widget-expand", (_event, expanded, notesOpen) => resizeWidget(Boolean(expanded), notesOpen));
+ipcMain.handle("window:widget-quote", (_event, visible, placement) => resizeWidgetQuote(Boolean(visible), placement));
 ipcMain.handle("quote:random", () => {
   if (!motivationalQuotes.length) return null;
   let index = Math.floor(Math.random() * motivationalQuotes.length);
@@ -473,24 +585,27 @@ ipcMain.handle("quote:random", () => {
   lastQuoteIndex = index;
   return motivationalQuotes[index];
 });
+ipcMain.on("window:widget-interactive", (_event, interactive) => setWidgetClickThrough(!interactive));
 ipcMain.on("window:widget-move", (_event, delta) => {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
   const dx = Math.max(-100, Math.min(100, Number(delta?.x) || 0));
   const dy = Math.max(-100, Math.min(100, Number(delta?.y) || 0));
   if (!dx && !dy) return;
   const bounds = widgetWindow.getBounds();
+  // Re-assert the intended size on every move — setPosition alone can drift height on Windows DPI.
+  const size = widgetSize(widgetExpanded);
   const virtualDesktop = getVirtualDesktopBounds();
   const visibleGrip = 24;
   const targetX = Math.round(Math.max(
-    virtualDesktop.left - bounds.width + visibleGrip,
+    virtualDesktop.left - size.width + visibleGrip,
     Math.min(bounds.x + dx, virtualDesktop.right - visibleGrip)
   ));
   const targetY = Math.round(Math.max(
-    virtualDesktop.top - bounds.height + visibleGrip,
+    virtualDesktop.top - size.height + visibleGrip,
     Math.min(bounds.y + dy, virtualDesktop.bottom - visibleGrip)
   ));
   if (Number.isFinite(targetX) && Number.isFinite(targetY)) {
-    widgetWindow.setPosition(targetX, targetY);
+    widgetWindow.setBounds({ x: targetX, y: targetY, width: size.width, height: size.height }, false);
   }
 });
 ipcMain.handle("pet:choose", async () => {

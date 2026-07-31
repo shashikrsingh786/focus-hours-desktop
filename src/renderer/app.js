@@ -4,6 +4,9 @@ const toastRegion = document.querySelector("#toast-region");
 const isWidget = new URLSearchParams(window.location.search).get("view") === "widget";
 const BUDDY_SIZE_MIN = 28;
 const BUDDY_SIZE_MAX = 180;
+const HALO_BLOCK = 32;
+const HALO_MIN_WIDTH = 150;
+const NOTEPAD_LIMIT = 4000;
 
 let appState;
 let currentPage = "overview";
@@ -12,9 +15,13 @@ let historySearch = "";
 let historySource = "all";
 let historySearchTimer;
 let buddySizeTimer;
+let notepadSaveTimer;
 let petOpen = false;
-let petDragState = null;
+let petNotesOpen = false;
+let widgetInteractive = true;
+let widgetDragState = null;
 let motivationQuote = null;
+let quotePlacement = { horizontal: "left", vertical: "up" };
 let quoteScheduleTimer = null;
 let quoteDismissTimer = null;
 let pendingDeletionRange = null;
@@ -29,7 +36,9 @@ const icons = {
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   play: '<path d="m8 5 11 7-11 7z"/>',
+  pause: '<path d="M9.5 5.5v13M14.5 5.5v13"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  note: '<path d="M5 4h11l3 3v13H5z"/><path d="M8.5 10h7M8.5 14h4.5"/>',
   edit: '<path d="m4 20 4.5-1 10-10-3.5-3.5-10 10zM13.8 6.7l3.5 3.5"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>',
@@ -104,8 +113,9 @@ function todayTotal(includeActive = true) {
   if (isWidget && Number.isFinite(appState.todayTotalMs)) return appState.todayTotalMs;
   const dayStart = startOfDay();
   let total = totalBetween(dayStart, Date.now() + 1);
-  if (includeActive && appState.tracker && appState.tracker.kind !== "break") {
-    total += Math.max(0, Date.now() - Math.max(dayStart, appState.tracker.startedAt));
+  // Finished segments already live in sessions, so only the running segment is added.
+  if (includeActive && appState.tracker && appState.tracker.kind !== "break" && appState.tracker.segmentStartedAt) {
+    total += Math.max(0, Date.now() - Math.max(dayStart, appState.tracker.segmentStartedAt));
   }
   return total;
 }
@@ -118,7 +128,11 @@ function renderKey(state) {
     historySource,
     sessions: state.sessions.map(({ id, startedAt, endedAt, task, project, note }) => ({ id, startedAt, endedAt, task, project, note })),
     settings: state.settings,
-    tracker: state.tracker ? `${state.tracker.kind}:${state.tracker.phase}:${state.tracker.startedAt}` : null,
+    tracker: state.tracker
+      ? `${state.tracker.kind}:${state.tracker.phase}:${state.tracker.startedAt}:${state.tracker.pausedAt ? "paused" : "live"}`
+      : null,
+    petOpen,
+    petNotesOpen,
     editingSessionId
   });
 }
@@ -158,7 +172,7 @@ function shell(content) {
           <p class="eyebrow">${formatDay(Date.now(), true)}</p>
           <h1>${pageTitle()}</h1>
         </div>
-        <button class="button secondary" data-action="manual">${icon("plus", 18)} Log work time</button>
+        <button class="button primary" data-action="manual">${icon("plus", 18)} Log work time</button>
       </header>
       ${content}
     </main>
@@ -180,10 +194,13 @@ function trackerPanel(compact = false) {
   const displayMs = tracker
     ? (tracker.remainingMs ?? tracker.elapsedMs)
     : appState.settings.workMinutes * 60_000;
-  const phaseLabel = tracker?.kind === "break"
-    ? (tracker.phase === "long-break" ? "Long break" : "Short break")
-    : tracker?.kind === "pomodoro" ? "Focus session" : tracker ? "Tracking now" : "Ready when you are";
-  return `<section class="tracker-card ${tracker ? "running" : ""} ${compact ? "compact" : ""}">
+  const paused = trackerIsPaused();
+  const phaseLabel = paused
+    ? "Paused"
+    : tracker?.kind === "break"
+      ? (tracker.phase === "long-break" ? "Long break" : "Short break")
+      : tracker?.kind === "pomodoro" ? "Focus session" : tracker ? "Tracking now" : "Ready when you are";
+  return `<section class="tracker-card ${tracker ? "running" : ""} ${paused ? "paused" : ""} ${compact ? "compact" : ""}">
     <div class="tracker-copy">
       <span class="live-label">${tracker ? '<i></i>' : ""}${phaseLabel}</span>
       <h2 data-dynamic="tracker-time">${formatClock(displayMs)}</h2>
@@ -191,7 +208,8 @@ function trackerPanel(compact = false) {
     </div>
     <div class="tracker-actions">
       ${tracker
-        ? `<button class="timer-button stop" data-action="stop" title="Stop and save this session">${icon("stop", 22)}</button>`
+        ? `<button class="timer-button" data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume this session" : "Pause and keep the time logged"}">${icon(paused ? "play" : "pause", 22)}</button>
+           <button class="timer-button stop" data-action="stop" title="Stop and save this session">${icon("stop", 20)}</button>`
         : `<button class="timer-button" data-action="start" title="Start live timer">${icon("play", 23)}</button>`}
     </div>
   </section>`;
@@ -449,15 +467,18 @@ function pomodoroPage() {
   return shell(`<div class="pomodoro-layout">
     <section class="focus-stage">
       <div class="phase-pill">${tracker?.kind === "break" ? "RECOVERY" : "DEEP FOCUS"} · ROUND ${(appState.pomodoroRound % appState.settings.roundsBeforeLongBreak) + 1} OF ${appState.settings.roundsBeforeLongBreak}</div>
-      <div class="focus-ring" style="--progress:${progress}">
-        <div><strong data-dynamic="tracker-time">${formatClock(duration)}</strong><span>${tracker?.kind === "break" ? "Breathe and reset" : tracker ? "Stay with it" : "Ready to focus"}</span></div>
+      <div class="focus-ring ${trackerIsPaused() ? "paused" : ""}" style="--progress:${progress}">
+        <div><strong data-dynamic="tracker-time">${formatClock(duration)}</strong><span>${trackerIsPaused() ? "Paused" : tracker?.kind === "break" ? "Breathe and reset" : tracker ? "Stay with it" : "Ready to focus"}</span></div>
       </div>
       <div class="focus-inputs">
         <input class="focus-task-input" id="focus-task" placeholder="What deserves your full attention?" value="${escapeHtml(tracker?.task || "")}" ${tracker ? "disabled" : ""}/>
         <input class="focus-task-input focus-project-input" id="focus-project" placeholder="Project / area" value="${escapeHtml(tracker?.project || "")}" ${tracker ? "disabled" : ""}/>
       </div>
       ${tracker
-        ? `<button class="button primary large" data-action="stop">${icon("stop", 20)} End ${tracker.kind === "break" ? "break" : "focus session"}</button>`
+        ? `<div class="focus-actions">
+             <button class="button secondary" data-action="${trackerIsPaused() ? "resume" : "pause"}">${icon(trackerIsPaused() ? "play" : "pause", 18)} ${trackerIsPaused() ? "Resume" : "Pause"}</button>
+             <button class="button primary large" data-action="stop">${icon("stop", 20)} End ${tracker.kind === "break" ? "break" : "focus session"}</button>
+           </div>`
         : `<button class="button primary large" data-action="start-pomodoro">${icon("play", 20)} Start focus session</button>`}
       <p class="quiet-note">Completed focus rounds are added to your work history automatically.</p>
     </section>
@@ -666,6 +687,7 @@ function aboutPage() {
 function shortcutList() {
   const rows = [
     ["Start or stop timer", ["Ctrl", "Alt", "Space"]],
+    ["Pause or resume timer", ["Ctrl", "Alt", "K"]],
     ["Start Pomodoro", ["Ctrl", "Alt", "P"]],
     ["Log past work", ["Ctrl", "Alt", "L"]],
     ["Open dashboard", ["Ctrl", "Alt", "F"]],
@@ -711,52 +733,115 @@ function toggleField(name, title, description, checked) {
   return `<label class="toggle-row"><div><strong>${title}</strong><span>${description}</span></div><input type="checkbox" name="${name}" ${checked ? "checked" : ""}/><i></i></label>`;
 }
 
+function trackerIsPaused() {
+  return Boolean(appState.tracker?.pausedAt);
+}
+
+// Time shown above the collapsed buddy: the live session while tracking, today's total when idle.
+function haloTime() {
+  const tracker = appState.tracker;
+  if (!tracker) return formatDuration(todayTotal(), true);
+  return formatClock(tracker.remainingMs ?? tracker.elapsedMs);
+}
+
+function petDock(petStyle) {
+  const tracker = appState.tracker;
+  const paused = trackerIsPaused();
+  const state = !tracker ? "idle" : paused ? "paused" : "live";
+  const label = !tracker ? "today" : paused ? "paused" : "focusing";
+  const petButton = `<button class="pet-orb pet-${petStyle} ${tracker && !paused ? "working" : ""}" data-pet-trigger="true" title="${tracker ? `${escapeHtml(tracker.task || "Focused work")} - click to open` : "Click to open your focus buddy"}">
+    ${petVisual(petStyle)}
+    ${tracker ? '<span class="pet-live"></span>' : ""}
+  </button>`;
+  return `<div class="pet-dock">
+    <div class="pet-halo is-${state}">
+      <span class="halo-pulse"></span>
+      <strong data-dynamic="halo-time">${haloTime()}</strong>
+      <span class="halo-label">${label}</span>
+      ${tracker
+        ? `<span class="halo-actions">
+            <button data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume focus" : "Pause focus"}" aria-label="${paused ? "Resume focus" : "Pause focus"}">${icon(paused ? "play" : "pause", 13)}</button>
+            <button class="halo-stop" data-action="stop" title="Stop and save" aria-label="Stop and save">${icon("stop", 13)}</button>
+          </span>`
+        : ""}
+    </div>
+    ${petButton}
+  </div>`;
+}
+
+function petNotesSection() {
+  const open = petNotesOpen;
+  const notepad = appState.notepad || "";
+  return `<div class="pet-notes ${open ? "is-open" : ""}">
+    <button class="pet-notes-toggle" data-action="toggle-notes" aria-expanded="${open}" aria-controls="pet-notes-body">
+      ${icon("note", 14)}
+      <span>Notes</span>
+      ${notepad.trim() && !open ? '<em class="notes-dot" aria-label="Has notes"></em>' : ""}
+      <i class="notes-chevron">${icon("chevron", 14)}</i>
+    </button>
+    ${open
+      ? `<div class="pet-notes-body" id="pet-notes-body">
+          <textarea id="pet-notepad" maxlength="${NOTEPAD_LIMIT}" spellcheck="false" placeholder="Thoughts, blockers, links…" aria-label="Notes">${escapeHtml(notepad)}</textarea>
+          <div class="pet-notes-meta"><span data-dynamic="notes-status">Autosaved</span></div>
+        </div>`
+      : ""}
+  </div>`;
+}
+
 function widgetView() {
   const tracker = appState.tracker;
   const displayMs = tracker ? (tracker.remainingMs ?? tracker.elapsedMs) : 0;
   const mode = appState.settings.widgetDisplay || "pet";
   const petStyle = appState.settings.petStyle || "cat";
+  const paused = trackerIsPaused();
 
   if (mode === "pet" && !petOpen) {
-    const petButton = `<button class="pet-orb pet-${petStyle} ${tracker ? "working" : ""}" data-pet-trigger="true" title="${tracker ? `${formatClock(displayMs)} - ${escapeHtml(tracker.task || "Focused work")}` : `${formatDuration(todayTotal(), true)} today - click to open`}">
-      ${petVisual(petStyle)}
-      ${tracker ? '<span class="pet-live"></span>' : ""}
-    </button>`;
     if (motivationQuote) {
-      return `<div class="quote-companion-shell">
+      return `<div class="quote-companion-shell quote-${quotePlacement.horizontal} quote-${quotePlacement.vertical}">
         <aside class="motivation-bubble" aria-live="polite">
           <button data-action="dismiss-quote" title="Dismiss quote" aria-label="Dismiss quote">${icon("close", 13)}</button>
           <p>${escapeHtml(motivationQuote.text)}</p>
           <span>&mdash; ${escapeHtml(motivationQuote.author)}</span>
         </aside>
-        ${petButton}
+        ${petDock(petStyle)}
       </div>`;
     }
-    return petButton;
+    return petDock(petStyle);
   }
 
   if (mode === "pet") {
-    return `<div class="pet-panel ${tracker ? "is-running" : ""}">
-      <div class="pet-panel-drag"><span>FOCUS BUDDY</span><button data-action="collapse-pet" title="Minimize to buddy" aria-label="Minimize companion">${icon("close", 15)}</button></div>
+    return `<div class="pet-panel ${tracker ? "is-running" : ""} ${paused ? "is-paused" : ""} ${petNotesOpen ? "notes-open" : ""}">
+      <div class="pet-panel-drag">
+        <span class="pet-brand"><i></i>Focus Buddy</span>
+        <div class="pet-panel-drag-end">
+          ${tracker ? `<em class="pet-panel-state">${paused ? "Paused" : "Live"}</em>` : ""}
+          <button data-action="open-dashboard" title="Open dashboard" aria-label="Open dashboard">${icon("external", 15)}</button>
+          <button data-action="collapse-pet" title="Minimize to buddy" aria-label="Minimize companion">${icon("close", 15)}</button>
+        </div>
+      </div>
       <div class="pet-panel-body">
         <span class="mini-pet pet-${petStyle}">${petStyle === "custom" && appState.settings.customPetIcon ? `<img src="${escapeHtml(appState.settings.customPetIcon)}" alt="Custom focus buddy"/>` : "<i></i><i></i><em></em>"}</span>
-        <div class="pet-status"><strong data-dynamic="tracker-time">${formatClock(displayMs)}</strong><span data-dynamic="tracker-task">${escapeHtml(tracker?.task || "Ready when you are")}</span><small>${formatDuration(todayTotal(), true)} today</small></div>
+        <div class="pet-status"><strong data-dynamic="tracker-time">${formatClock(displayMs)}</strong><span data-dynamic="tracker-task">${escapeHtml(tracker?.task || "Ready to focus")}</span><small data-dynamic="today-total">${formatDuration(todayTotal(), true)} today</small></div>
         <div class="pet-controls">
-          <button class="${tracker ? "stop" : ""}" data-action="${tracker ? "stop" : "start"}" title="${tracker ? "Stop and save" : "Start timer"}" aria-label="${tracker ? "Stop and save timer" : "Start timer"}">${icon(tracker ? "stop" : "play", 19)}</button>
-          <button class="pet-dashboard" data-action="open-dashboard" title="Open dashboard"><span class="dashboard-icon">${icon("external", 16)}</span><span>Dashboard</span></button>
+          ${tracker
+            ? `<button data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume focus" : "Pause focus"}" aria-label="${paused ? "Resume focus" : "Pause focus"}">${icon(paused ? "play" : "pause", 19)}</button>
+               <button class="pet-secondary-control" data-action="stop" title="Stop and save" aria-label="Stop and save timer">${icon("stop", 15)}</button>`
+            : `<button data-action="start" title="Start timer" aria-label="Start timer">${icon("play", 19)}</button>`}
         </div>
       </div>
       ${tracker
-        ? `<div class="pet-ledger-context">${icon("briefcase", 13)}<span>${escapeHtml(tracker.project || "Unsorted")} &middot; saves to the work ledger when stopped</span></div>`
+        ? `<div class="pet-ledger-context">${icon("briefcase", 13)}<span>${escapeHtml(tracker.project || "Unsorted")} &middot; ${paused ? "time so far is already in the ledger" : "saves to the work ledger when you pause or stop"}</span></div>`
         : `<div class="pet-entry-fields"><input id="pet-task" maxlength="120" placeholder="What are you working on?" aria-label="Task name"/><input id="pet-project" maxlength="80" placeholder="Project / area" aria-label="Project or area"/></div>`}
+      ${petNotesSection()}
     </div>`;
   }
 
   if (mode === "compact") {
-    return `<div class="compact-widget">
-      <div class="compact-drag"><span class="${tracker ? "active" : ""}"></span></div>
+    return `<div class="compact-widget ${tracker ? "is-running" : ""}">
+      <div class="compact-drag"><span class="${tracker ? (paused ? "paused" : "active") : ""}"></span></div>
       <div class="compact-time"><strong data-dynamic="tracker-time">${formatClock(displayMs)}</strong><span data-dynamic="tracker-task">${escapeHtml(tracker?.task || "Ready to focus")}</span></div>
-      <button class="compact-control ${tracker ? "stop" : ""}" data-action="${tracker ? "stop" : "start"}">${icon(tracker ? "stop" : "play", 17)}</button>
+      <button class="compact-control" data-action="${tracker ? (paused ? "resume" : "pause") : "start"}" title="${tracker ? (paused ? "Resume focus" : "Pause focus") : "Start timer"}">${icon(tracker && !paused ? "pause" : "play", 17)}</button>
+      ${tracker ? `<button class="compact-control stop" data-action="stop" title="Stop and save">${icon("stop", 15)}</button>` : ""}
       <button class="compact-open" data-action="open-dashboard" title="Dashboard">${icon("external", 15)}</button>
       <button class="compact-hide" data-action="hide-widget" title="Hide">${icon("close", 13)}</button>
     </div>`;
@@ -774,12 +859,13 @@ function widgetView() {
       </div>
       <div class="widget-actions">
         ${tracker
-          ? `<button class="widget-control stop" data-action="stop" title="Stop and save">${icon("stop", 18)}</button>`
+          ? `<button class="widget-control" data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume focus" : "Pause focus"}">${icon(paused ? "play" : "pause", 18)}</button>
+             <button class="widget-control stop" data-action="stop" title="Stop and save">${icon("stop", 16)}</button>`
           : `<button class="widget-control" data-action="start" title="Start timer">${icon("play", 18)}</button>`}
         <button class="widget-open" data-action="open-dashboard" title="Open dashboard">${icon("external", 17)}</button>
       </div>
     </div>
-    <div class="widget-footer"><span data-dynamic="today-total">${formatDuration(todayTotal(), true)} today</span><i class="${tracker ? "active" : ""}"></i></div>
+    <div class="widget-footer"><span data-dynamic="today-total">${formatDuration(todayTotal(), true)} today</span><i class="${tracker ? (paused ? "paused" : "active") : ""}"></i></div>
   </div>`;
 }
 
@@ -787,6 +873,7 @@ function render(force = false) {
   const key = renderKey(appState);
   if (!force && key === lastRenderKey) {
     updateDynamic();
+    syncNotepadField();
     return;
   }
   lastRenderKey = key;
@@ -796,7 +883,9 @@ function render(force = false) {
     const buddySize = Math.max(BUDDY_SIZE_MIN, Math.min(BUDDY_SIZE_MAX, appState.settings.buddySize || 62));
     document.documentElement.style.setProperty("--buddy-scale", String(buddySize / 62));
     document.documentElement.style.setProperty("--buddy-extra", `${Math.max(0, buddySize - 62)}px`);
+    const typing = captureWidgetTyping();
     appRoot.innerHTML = widgetView();
+    restoreWidgetTyping(typing);
     return;
   }
   appRoot.innerHTML = currentPage === "overview"
@@ -810,12 +899,61 @@ function render(force = false) {
           : aboutPage();
 }
 
+function setNotesStatus(message) {
+  const status = document.querySelector('[data-dynamic="notes-status"]');
+  if (status) status.textContent = message;
+}
+
+function queueNotepadSave(value) {
+  setNotesStatus("Saving…");
+  clearTimeout(notepadSaveTimer);
+  notepadSaveTimer = setTimeout(() => {
+    api.saveNotepad(value)
+      .then(() => setNotesStatus("Autosaved"))
+      .catch((error) => showToast(error.message || "Could not save your notes", "error"));
+  }, 400);
+}
+
+function flushNotepadSave() {
+  const field = document.querySelector("#pet-notepad");
+  if (!field) return;
+  clearTimeout(notepadSaveTimer);
+  if (field.value === (appState.notepad || "")) return;
+  api.saveNotepad(field.value).catch(() => {});
+}
+
+// Notes are excluded from the render key so typing never rebuilds the panel; instead the
+// field is refreshed only while the writer is not in it.
+function syncNotepadField() {
+  const field = document.querySelector("#pet-notepad");
+  if (!field || field === document.activeElement) return;
+  const next = appState.notepad || "";
+  if (field.value !== next) field.value = next;
+}
+
+// The widget re-renders from scratch, so half-typed text and the caret are carried across.
+function captureWidgetTyping() {
+  const active = document.activeElement;
+  if (!active?.id || !active.matches?.(".pet-panel input, .pet-panel textarea")) return null;
+  return { id: active.id, value: active.value, start: active.selectionStart, end: active.selectionEnd };
+}
+
+function restoreWidgetTyping(typing) {
+  if (!typing) return;
+  const input = document.getElementById(typing.id);
+  if (!input) return;
+  input.value = typing.value;
+  input.focus();
+  input.setSelectionRange?.(typing.start, typing.end);
+}
+
 function updateDynamic() {
   const tracker = appState.tracker;
   const time = tracker ? (tracker.remainingMs ?? tracker.elapsedMs) : (isWidget ? 0 : appState.settings.workMinutes * 60_000);
   document.querySelectorAll('[data-dynamic="tracker-time"]').forEach((el) => { el.textContent = formatClock(time); });
   document.querySelectorAll('[data-dynamic="tracker-task"]').forEach((el) => { el.textContent = tracker?.task || (isWidget ? "Ready to focus" : "What are you working on?"); });
   document.querySelectorAll('[data-dynamic="today-total"]').forEach((el) => { el.textContent = `${formatDuration(todayTotal(), true)}${isWidget ? " today" : ""}`; });
+  document.querySelectorAll('[data-dynamic="halo-time"]').forEach((el) => { el.textContent = haloTime(); });
 }
 
 function scheduleMotivationQuote(initial = false) {
@@ -837,10 +975,25 @@ async function showMotivationQuote() {
     scheduleMotivationQuote(false);
     return;
   }
+  const buddySize = Math.max(BUDDY_SIZE_MIN, Math.min(BUDDY_SIZE_MAX, appState.settings.buddySize || 62));
+  const collapsedWidth = Math.max(buddySize + 14, HALO_MIN_WIDTH);
+  const collapsedHeight = buddySize + 14 + HALO_BLOCK;
+  const quoteWidth = 350 + Math.max(0, buddySize - 62);
+  const quoteHeight = 152 + Math.max(0, buddySize - 62) + HALO_BLOCK;
+  const availableLeft = window.screenX - (window.screen.availLeft || 0);
+  const availableTop = window.screenY - (window.screen.availTop || 0);
+  const availableRight = (window.screen.availLeft || 0) + window.screen.availWidth - (window.screenX + collapsedWidth);
+  const availableBottom = (window.screen.availTop || 0) + window.screen.availHeight - (window.screenY + collapsedHeight);
+  const horizontalGrowth = quoteWidth - collapsedWidth;
+  const verticalGrowth = quoteHeight - collapsedHeight;
+  quotePlacement = {
+    horizontal: availableLeft >= horizontalGrowth || availableLeft >= availableRight ? "left" : "right",
+    vertical: availableTop >= verticalGrowth || availableTop >= availableBottom ? "up" : "down"
+  };
   motivationQuote = quote;
   lastRenderKey = "";
   render(true);
-  await api.setQuoteVisible(true);
+  await api.setQuoteVisible(true, quotePlacement);
   clearTimeout(quoteDismissTimer);
   quoteDismissTimer = setTimeout(dismissMotivationQuote, 14_000);
 }
@@ -940,6 +1093,23 @@ document.addEventListener("click", async (event) => {
       await api.stopTracker(true);
       showToast("Session saved to your history");
     }
+    if (target.dataset.action === "pause") {
+      await api.pauseTracker();
+      showToast("Paused · time so far is saved");
+    }
+    if (target.dataset.action === "resume") {
+      await api.resumeTracker();
+      showToast("Back to focus");
+    }
+    if (target.dataset.action === "toggle-notes") {
+      if (petNotesOpen) flushNotepadSave();
+      petNotesOpen = !petNotesOpen;
+      widgetInteractive = true;
+      await api.setWidgetExpanded(true, petNotesOpen);
+      lastRenderKey = "";
+      render(true);
+      if (petNotesOpen) document.querySelector("#pet-notepad")?.focus();
+    }
     if (target.dataset.action === "show-widget") {
       await api.setWidgetVisible(true);
       showToast("Mini timer is now visible");
@@ -947,10 +1117,7 @@ document.addEventListener("click", async (event) => {
     if (target.dataset.action === "hide-widget") await api.hideWindow();
     if (target.dataset.action === "dismiss-quote") dismissMotivationQuote(true);
     if (target.dataset.action === "collapse-pet") {
-      petOpen = false;
-      await api.setWidgetExpanded(false);
-      lastRenderKey = "";
-      render(true);
+      await collapsePetPanel();
     }
     if (target.dataset.action === "open-dashboard") await api.openDashboard();
     if (target.dataset.action === "choose-custom-pet") {
@@ -977,6 +1144,10 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.id === "pet-notepad") {
+    queueNotepadSave(event.target.value);
+    return;
+  }
   if (event.target.id === "buddy-size") {
     const value = Number(event.target.value);
     const output = document.querySelector("#buddy-size-output");
@@ -1020,12 +1191,28 @@ document.addEventListener("change", async (event) => {
   }
 });
 
-document.addEventListener("pointerdown", (event) => {
-  const pet = event.target.closest('.pet-orb[data-pet-trigger="true"]');
-  if (!pet || event.button !== 0) return;
+const WIDGET_HIT_AREAS = ".pet-orb, .pet-halo, .pet-panel, .motivation-bubble, .compact-widget, .widget-shell";
+const WIDGET_DRAG_BLOCKERS = "button, input, textarea, select, a, label, [contenteditable='true']";
+
+async function collapsePetPanel() {
+  if (!isWidget || !petOpen) return;
+  flushNotepadSave();
+  petOpen = false;
+  petNotesOpen = false;
+  lastRenderKey = "";
+  render(true);
+  try {
+    await api.setWidgetExpanded(false);
+  } catch (error) {
+    showToast(error.message || "Could not minimize companion", "error");
+  }
+}
+
+function beginWidgetDrag(event, el, kind) {
   event.preventDefault();
-  petDragState = {
-    pet,
+  widgetDragState = {
+    kind,
+    el,
     pointerId: event.pointerId,
     startX: event.screenX,
     startY: event.screenY,
@@ -1033,49 +1220,95 @@ document.addEventListener("pointerdown", (event) => {
     lastY: event.screenY,
     moved: false
   };
-  pet.setPointerCapture?.(event.pointerId);
+  el.setPointerCapture?.(event.pointerId);
+}
+
+document.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  const pet = event.target.closest('.pet-orb[data-pet-trigger="true"]');
+  if (pet) {
+    beginWidgetDrag(event, pet, "pet");
+    return;
+  }
+  if (!isWidget) return;
+  // Click outside the expanded Focus Buddy panel → collapse back to the pet.
+  if (petOpen && !event.target.closest(".pet-panel")) {
+    collapsePetPanel();
+    return;
+  }
+  if (event.target.closest(WIDGET_DRAG_BLOCKERS)) return;
+  const surface = event.target.closest(".pet-panel, .pet-halo, .motivation-bubble, .compact-widget, .widget-shell");
+  if (!surface) return;
+  beginWidgetDrag(event, surface, "surface");
 });
 
 document.addEventListener("pointermove", (event) => {
-  if (!petDragState || event.pointerId !== petDragState.pointerId) return;
-  const totalDistance = Math.hypot(event.screenX - petDragState.startX, event.screenY - petDragState.startY);
+  if (!widgetDragState || event.pointerId !== widgetDragState.pointerId) return;
+  const totalDistance = Math.hypot(event.screenX - widgetDragState.startX, event.screenY - widgetDragState.startY);
   if (totalDistance > 4) {
-    petDragState.moved = true;
-    petDragState.pet.classList.add("dragging");
+    widgetDragState.moved = true;
+    widgetDragState.el.classList.add("dragging");
   }
-  if (!petDragState.moved) return;
-  const dx = event.screenX - petDragState.lastX;
-  const dy = event.screenY - petDragState.lastY;
-  petDragState.lastX = event.screenX;
-  petDragState.lastY = event.screenY;
+  if (!widgetDragState.moved) return;
+  const dx = event.screenX - widgetDragState.lastX;
+  const dy = event.screenY - widgetDragState.lastY;
+  widgetDragState.lastX = event.screenX;
+  widgetDragState.lastY = event.screenY;
   if (dx || dy) api.moveWidgetBy(dx, dy);
 });
 
-function finishPetDrag(event, cancelled = false) {
-  if (!petDragState || event.pointerId !== petDragState.pointerId) return;
-  const shouldOpen = !cancelled && !petDragState.moved;
-  petDragState.pet.classList.remove("dragging");
-  petDragState.pet.releasePointerCapture?.(event.pointerId);
-  petDragState = null;
-  if (shouldOpen) {
-    if (motivationQuote) dismissMotivationQuote(false);
-    petOpen = true;
+function finishWidgetDrag(event, cancelled = false) {
+  if (!widgetDragState || event.pointerId !== widgetDragState.pointerId) return;
+  const { kind, el, moved } = widgetDragState;
+  el.classList.remove("dragging");
+  el.releasePointerCapture?.(event.pointerId);
+  widgetDragState = null;
+  if (kind !== "pet" || cancelled || moved) return;
+  if (motivationQuote) dismissMotivationQuote(false);
+  petOpen = true;
+  widgetInteractive = true;
+  lastRenderKey = "";
+  render(true);
+  api.setWidgetExpanded(true, petNotesOpen).catch((error) => {
+    petOpen = false;
     lastRenderKey = "";
     render(true);
-    api.setWidgetExpanded(true).catch((error) => {
-      petOpen = false;
-      lastRenderKey = "";
-      render(true);
-      showToast(error.message || "Could not open companion", "error");
-    });
-  }
+    showToast(error.message || "Could not open companion", "error");
+  });
 }
 
-document.addEventListener("pointerup", finishPetDrag);
-document.addEventListener("pointercancel", (event) => finishPetDrag(event, true));
+document.addEventListener("pointerup", finishWidgetDrag);
+document.addEventListener("pointercancel", (event) => finishWidgetDrag(event, true));
+
+function syncWidgetInteractive(interactive) {
+  if (interactive === widgetInteractive) return;
+  widgetInteractive = interactive;
+  api.setWidgetInteractive(interactive);
+}
+
+if (isWidget) {
+  window.addEventListener("blur", () => {
+    flushNotepadSave();
+    // Clicking the desktop, dashboard, or any other window dismisses the panel.
+    if (petOpen && !widgetDragState) collapsePetPanel();
+  });
+  window.addEventListener("beforeunload", flushNotepadSave);
+  document.addEventListener("mousemove", (event) => {
+    if (widgetDragState) return;
+    syncWidgetInteractive(Boolean(event.target?.closest?.(WIDGET_HIT_AREAS)));
+  });
+  document.addEventListener("mouseleave", () => {
+    if (!widgetDragState) syncWidgetInteractive(false);
+  });
+}
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && document.querySelector(".modal-backdrop")) closeModal();
+  if (event.key === "Escape" && isWidget && petOpen) {
+    event.preventDefault();
+    collapsePetPanel();
+    return;
+  }
   if (event.key === "Enter" && (event.target.id === "pet-task" || event.target.id === "pet-project")) {
     event.preventDefault();
     start("timer", "#pet-task", "#pet-project").catch((error) => showToast(error.message || "Could not start timer", "error"));
