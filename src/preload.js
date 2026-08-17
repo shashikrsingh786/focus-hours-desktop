@@ -6,12 +6,27 @@ contextBridge.exposeInMainWorld("focusHours", {
   updateSession: (session) => ipcRenderer.invoke("session:update", session),
   deleteSession: (id) => ipcRenderer.invoke("session:delete", id),
   deleteSessionsInRange: (range) => ipcRenderer.invoke("session:delete-range", range),
+  restoreSession: (id) => ipcRenderer.invoke("session:restore", id),
+  purgeDeletedSession: (id) => ipcRenderer.invoke("session:purge", id),
+  purgeAllDeletedSessions: () => ipcRenderer.invoke("session:purge-all-deleted"),
+  exportData: () => ipcRenderer.invoke("data:export"),
+  chooseImportData: () => ipcRenderer.invoke("data:choose-import"),
+  applyImportData: (payload) => ipcRenderer.invoke("data:apply-import", payload),
   startTracker: (options) => ipcRenderer.invoke("tracker:start", options),
   stopTracker: (save = true) => ipcRenderer.invoke("tracker:stop", save),
   pauseTracker: () => ipcRenderer.invoke("tracker:pause"),
   resumeTracker: () => ipcRenderer.invoke("tracker:resume"),
+  extendTracker: (minutes = 2) => ipcRenderer.invoke("tracker:extend", minutes),
+  saveFocusDraft: (draft) => ipcRenderer.invoke("focus-draft:save", draft),
   saveNotepad: (text) => ipcRenderer.invoke("notepad:save", text),
   updateSettings: (settings) => ipcRenderer.invoke("settings:update", settings),
+  testWhatsAppIntegration: () => ipcRenderer.invoke("integrations:whatsapp-test"),
+  sendWhatsAppSample: (eventId) => ipcRenderer.invoke("integrations:whatsapp-sample", eventId),
+  onWhatsAppNotify: (callback) => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on("integrations:whatsapp-notify", listener);
+    return () => ipcRenderer.removeListener("integrations:whatsapp-notify", listener);
+  },
   openDashboard: () => ipcRenderer.invoke("window:dashboard"),
   setWidgetVisible: (visible) => ipcRenderer.invoke("window:widget", visible),
   setWidgetExpanded: (expanded, notesOpen) => ipcRenderer.invoke("window:widget-expand", expanded, notesOpen),
@@ -33,6 +48,11 @@ contextBridge.exposeInMainWorld("focusHours", {
     const listener = (_event, value) => callback(value);
     ipcRenderer.on("timer:tick", listener);
     return () => ipcRenderer.removeListener("timer:tick", listener);
+  },
+  onTimerCompleted: (callback) => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on("timer:completed", listener);
+    return () => ipcRenderer.removeListener("timer:completed", listener);
   },
   onAppAction: (callback) => {
     const listener = (_event, value) => callback(value);

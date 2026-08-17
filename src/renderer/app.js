@@ -14,8 +14,12 @@ const NOTEPAD_LIMIT = 4000;
 let appState;
 let currentPage = "overview";
 let selectedRange = "week";
+let historyPeriodOffset = 0;
 let historySearch = "";
 let historySource = "all";
+let ledgerPageIndex = 1;
+let historyPageSize = 10;
+const HISTORY_PAGE_SIZES = [10, 20, 50];
 let historySearchTimer;
 let buddySizeTimer;
 let dropVideoSizeTimer;
@@ -32,6 +36,9 @@ let quotePlacement = { horizontal: "left", vertical: "up" };
 let quoteScheduleTimer = null;
 let quoteDismissTimer = null;
 let pendingDeletionRange = null;
+let pendingDeleteSessionId = null;
+let pendingImportBackup = null;
+let settingsSection = "rhythm";
 let editingSessionId = null;
 let lastRenderKey = "";
 
@@ -58,7 +65,28 @@ const icons = {
   briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V4h8v3M3 12h18M10 12v2h4v-2"/>',
   about: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>',
   layers: '<path d="m12 3-9 5 9 5 9-5z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/>',
-  spark: '<path d="m12 3 1.3 4.2L17 9l-3.7 1.8L12 15l-1.3-4.2L7 9l3.7-1.8zM5 16l.7 2.3L8 19.5l-2.3 1.2L5 23l-.7-2.3L2 19.5l2.3-1.2z"/>'
+  spark: '<path d="m12 3 1.3 4.2L17 9l-3.7 1.8L12 15l-1.3-4.2L7 9l3.7-1.8zM5 16l.7 2.3L8 19.5l-2.3 1.2L5 23l-.7-2.3L2 19.5l2.3-1.2z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L11 4.93"/><path d="M14 11a5 5 0 0 0-7.07 0L4.81 13.12a5 5 0 0 0 7.07 7.07L13 19.07"/>'
+};
+
+const WHATSAPP_EVENT_META = [
+  { id: "focusStart", label: "Focus started", hint: "When a Pomodoro focus session begins" },
+  { id: "focusEnd", label: "Focus finished", hint: "When a focus round completes" },
+  { id: "breakStart", label: "Rest started", hint: "When a short or long break begins" },
+  { id: "breakEnd", label: "Rest finished", hint: "When a break ends" },
+  { id: "sessionPaused", label: "Session paused", hint: "When you pause an active session" },
+  { id: "sessionResumed", label: "Session resumed", hint: "When you resume after a pause" },
+  { id: "sessionStopped", label: "Session stopped", hint: "When you manually end a session" }
+];
+
+const WHATSAPP_MESSAGE_DEFAULTS = {
+  focusStart: 'Focus started on "{{task}}". Stay with it.',
+  focusEnd: 'Focus finished for "{{task}}". Time for a break.',
+  breakStart: "Rest started ({{phase}}). Step away for a bit.",
+  breakEnd: 'Break over. Ready to focus again on "{{task}}".',
+  sessionPaused: 'Session paused for "{{task}}".',
+  sessionResumed: 'Back to {{phase}} on "{{task}}".',
+  sessionStopped: 'Session stopped for "{{task}}" ({{duration}}).'
 };
 
 function icon(name, size = 20) {
@@ -108,6 +136,38 @@ function startOfDay(timestamp = Date.now()) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
+function shiftDays(timestamp, days) {
+  const date = new Date(timestamp);
+  date.setDate(date.getDate() + days);
+  return date.getTime();
+}
+
+function startOfWeek(timestamp = Date.now()) {
+  const dayStart = startOfDay(timestamp);
+  const weekday = new Date(dayStart).getDay();
+  const daysFromMonday = weekday === 0 ? 6 : weekday - 1;
+  return shiftDays(dayStart, -daysFromMonday);
+}
+
+function historyPeriodBounds(offset = historyPeriodOffset) {
+  const todayStart = startOfDay();
+  if (selectedRange === "today") {
+    const from = shiftDays(todayStart, -offset);
+    return { from, to: shiftDays(from, 1) };
+  }
+  if (selectedRange === "week") {
+    const from = shiftDays(startOfWeek(todayStart), -offset * 7);
+    return { from, to: shiftDays(from, 7) };
+  }
+  if (selectedRange === "month") {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth() - offset, 1).getTime();
+    const to = new Date(now.getFullYear(), now.getMonth() - offset + 1, 1).getTime();
+    return { from, to };
+  }
+  return { from: 0, to: Date.now() + 1 };
+}
+
 function sessionDurationInRange(session, from, to) {
   return Math.max(0, Math.min(session.endedAt, to) - Math.max(session.startedAt, from));
 }
@@ -131,13 +191,19 @@ function renderKey(state) {
   return JSON.stringify({
     page: currentPage,
     range: selectedRange,
+    historyPeriodOffset,
     historySearch,
     historySource,
+    ledgerPageIndex,
+    historyPageSize,
+    settingsSection,
     sessions: state.sessions.map(({ id, startedAt, endedAt, task, project, note }) => ({ id, startedAt, endedAt, task, project, note })),
+    deletedSessions: (state.deletedSessions || []).map(({ id, deletedAt, task }) => ({ id, deletedAt, task })),
     settings: state.settings,
     tracker: state.tracker
-      ? `${state.tracker.kind}:${state.tracker.phase}:${state.tracker.startedAt}:${state.tracker.pausedAt ? "paused" : "live"}`
+      ? `${state.tracker.kind}:${state.tracker.phase}:${state.tracker.startedAt}:${state.tracker.pausedAt ? "paused" : "live"}:${state.tracker.overtimeMs || 0}:${state.tracker.endsAt || 0}`
       : null,
+    pomodoroRound: state.pomodoroRound,
     petOpen,
     petNotesOpen,
     petVideoPlaying,
@@ -197,18 +263,45 @@ function pageTitle() {
   }[currentPage];
 }
 
+function trackerIsBreak() {
+  return appState.tracker?.kind === "break";
+}
+
+function trackerIsOverloaded() {
+  return Boolean(appState.tracker?.endsAt && (appState.tracker.overtimeMs || 0) > 0);
+}
+
+function trackerIsPomodoroFlow() {
+  const kind = appState.tracker?.kind;
+  return kind === "pomodoro" || kind === "break";
+}
+
+function currentPomodoroRound() {
+  const cycle = Math.max(1, appState.settings.roundsBeforeLongBreak || 4);
+  return (appState.pomodoroRound % cycle) + 1;
+}
+
+function stickyFocusTask() {
+  return appState.tracker?.task || appState.focusDraft?.task || "";
+}
+
+function stickyFocusProject() {
+  return appState.tracker?.project || appState.focusDraft?.project || "";
+}
+
 function trackerPanel(compact = false) {
   const tracker = appState.tracker;
   const displayMs = tracker
     ? (tracker.remainingMs ?? tracker.elapsedMs)
     : appState.settings.workMinutes * 60_000;
   const paused = trackerIsPaused();
+  const onBreak = trackerIsBreak();
   const phaseLabel = paused
     ? "Paused"
-    : tracker?.kind === "break"
+    : onBreak
       ? (tracker.phase === "long-break" ? "Long break" : "Short break")
       : tracker?.kind === "pomodoro" ? "Focus session" : tracker ? "Tracking now" : "Ready when you are";
-  return `<section class="tracker-card ${tracker ? "running" : ""} ${paused ? "paused" : ""} ${compact ? "compact" : ""}">
+  return `<section class="tracker-card ${tracker ? "running" : ""} ${paused ? "paused" : ""} ${onBreak ? "on-break" : ""} ${compact ? "compact" : ""}">
     <div class="tracker-copy">
       <span class="live-label">${tracker ? '<i></i>' : ""}${phaseLabel}</span>
       <h2 data-dynamic="tracker-time">${formatClock(displayMs)}</h2>
@@ -225,7 +318,7 @@ function trackerPanel(compact = false) {
 
 function overviewPage() {
   const dayStart = startOfDay();
-  const weekStart = dayStart - new Date().getDay() * 86_400_000;
+  const weekStart = startOfWeek(dayStart);
   const today = todayTotal();
   const week = totalBetween(weekStart, Date.now() + 1);
   const sessionsToday = appState.sessions.filter((s) => s.startedAt >= dayStart).length;
@@ -240,8 +333,8 @@ function overviewPage() {
           <button class="icon-button info" title="Live timers keep counting even if this window is hidden.">${icon("info", 18)}</button>
         </div>
         <div class="tracking-fields">
-          <label class="task-input-wrap"><span class="sr-only">Current task</span><input id="quick-task" placeholder="Name the outcome you want to move forward…" maxlength="120" value="${escapeHtml(appState.tracker?.task || "")}" ${appState.tracker ? "disabled" : ""}/></label>
-          <label class="task-input-wrap project-input"><span class="sr-only">Project or area</span><input id="quick-project" placeholder="Project / area" maxlength="80" value="${escapeHtml(appState.tracker?.project || "")}" ${appState.tracker ? "disabled" : ""}/></label>
+          <label class="task-input-wrap"><span class="sr-only">Current task</span><input id="quick-task" placeholder="Name the outcome you want to move forward…" maxlength="120" value="${escapeHtml(stickyFocusTask())}" ${appState.tracker ? "disabled" : ""}/></label>
+          <label class="task-input-wrap project-input"><span class="sr-only">Project or area</span><input id="quick-project" placeholder="Project / area" maxlength="80" value="${escapeHtml(stickyFocusProject())}" ${appState.tracker ? "disabled" : ""}/></label>
         </div>
         <div class="mode-row">
           <button class="mode-button ${appState.tracker?.kind !== "pomodoro" ? "selected" : ""}" data-start-kind="timer">${icon("clock", 18)} Open timer</button>
@@ -309,31 +402,60 @@ function sessionList(sessions, minimal = false) {
     </article>`).join("")}</div>`;
 }
 
+function historyPeriodSupportsOffset(range = selectedRange) {
+  return range === "today" || range === "week" || range === "month";
+}
+
+function formatPeriodSpan(from, to) {
+  const startLabel = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(from);
+  const endLabel = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(to - 1);
+  return startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
+}
+
+function worklogPeriodNavigator() {
+  if (!historyPeriodSupportsOffset()) return "";
+  const { from, to } = historyPeriodBounds();
+  const label = selectedRange === "month"
+    ? new Intl.DateTimeFormat(undefined, { month: "short", year: "numeric" }).format(from)
+    : selectedRange === "today"
+      ? (historyPeriodOffset === 0 ? "Today" : historyPeriodOffset === 1 ? "Yesterday" : formatDay(from))
+      : formatPeriodSpan(from, to);
+  return `<div class="period-nav" role="group" aria-label="Browse ${selectedRange} periods">
+    <button type="button" class="period-nav-button" data-history-period="prev" aria-label="Previous ${selectedRange}"><span class="flip">${icon("chevron", 15)}</span></button>
+    <span class="period-nav-label" title="${escapeHtml(worklogRangeLabel())}">${escapeHtml(label)}</span>
+    <button type="button" class="period-nav-button" data-history-period="next" ${historyPeriodOffset <= 0 ? "disabled" : ""} aria-label="Next ${selectedRange}">${icon("chevron", 15)}</button>
+  </div>`;
+}
+
 function historyPage() {
-  const now = Date.now();
-  const from = selectedRange === "today"
-    ? startOfDay(now)
-    : selectedRange === "week"
-      ? startOfDay(now) - 6 * 86_400_000
-      : selectedRange === "month"
-        ? new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime()
-        : 0;
+  historyPeriodOffset = historyPeriodSupportsOffset() ? Math.max(0, historyPeriodOffset) : 0;
+  const { from, to } = historyPeriodBounds();
   const query = historySearch.trim().toLowerCase();
   const sessions = appState.sessions.filter((session) => {
     const haystack = `${session.task || ""} ${session.project || ""} ${session.note || ""}`.toLowerCase();
     return session.endedAt >= from
+      && session.endedAt < to
       && (historySource === "all" || session.source === historySource)
       && (!query || haystack.includes(query));
   });
+  const totalPages = Math.max(1, Math.ceil(sessions.length / historyPageSize));
+  ledgerPageIndex = Math.min(Math.max(1, ledgerPageIndex), totalPages);
+  const pageStart = (ledgerPageIndex - 1) * historyPageSize;
+  const pageSessions = sessions.slice(pageStart, pageStart + historyPageSize);
   const total = sessions.reduce((sum, session) => sum + session.durationMs, 0);
   const activeDays = new Set(sessions.map((session) => startOfDay(session.startedAt))).size;
   const longest = sessions.reduce((best, session) => Math.max(best, session.durationMs), 0);
   const average = activeDays ? total / activeDays : 0;
   const goalMs = (appState.settings.dailyGoalHours || 8) * 3_600_000;
+  const showingFrom = sessions.length ? pageStart + 1 : 0;
+  const showingTo = Math.min(sessions.length, pageStart + pageSessions.length);
 
   return shell(`<section class="worklog-commandbar">
-      <div class="range-tabs worklog-ranges" role="tablist" aria-label="Work log range">
-        ${["today", "week", "month", "all"].map((range) => `<button class="${selectedRange === range ? "active" : ""}" data-range="${range}">${range === "all" ? "All time" : range[0].toUpperCase() + range.slice(1)}</button>`).join("")}
+      <div class="worklog-range-row">
+        <div class="range-tabs worklog-ranges" role="tablist" aria-label="Work log range">
+          ${["today", "week", "month", "all"].map((range) => `<button class="${selectedRange === range ? "active" : ""}" data-range="${range}">${range === "all" ? "All time" : range[0].toUpperCase() + range.slice(1)}</button>`).join("")}
+        </div>
+        ${worklogPeriodNavigator()}
       </div>
       <div class="worklog-tools">
         <label class="search-field">${icon("search", 17)}<input id="history-search" value="${escapeHtml(historySearch)}" placeholder="Search task, project or note" aria-label="Search work log"/></label>
@@ -355,12 +477,13 @@ function historyPage() {
       <section class="ledger-card">
         <div class="ledger-heading">
           <div><span class="section-kicker">WORK LEDGER</span><h2>${worklogRangeLabel()}</h2></div>
-          <span class="ledger-count">${sessions.length} entries</span>
+          <span class="ledger-count">${sessions.length ? `${showingFrom}–${showingTo} of ${sessions.length}` : "0 entries"}</span>
         </div>
-        ${workLedger(sessions)}
+        ${workLedger(pageSessions)}
+        ${sessions.length ? ledgerPagination(totalPages) : ""}
       </section>
       <aside class="worklog-insights">
-        ${activityPulse()}
+        ${activityPulse(from, to)}
         ${projectBreakdown(sessions)}
         <section class="tracking-note">
           <span class="note-mark">${icon("spark", 17)}</span>
@@ -378,9 +501,19 @@ function metricCard(label, value, meta, iconName) {
 }
 
 function worklogRangeLabel() {
-  if (selectedRange === "today") return "Today";
-  if (selectedRange === "week") return "The last seven days";
-  if (selectedRange === "month") return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(Date.now());
+  const { from, to } = historyPeriodBounds();
+  if (selectedRange === "today") {
+    if (historyPeriodOffset === 0) return "Today";
+    if (historyPeriodOffset === 1) return "Yesterday";
+    return formatDay(from, true);
+  }
+  if (selectedRange === "week") {
+    if (historyPeriodOffset === 0) return `This week · ${formatPeriodSpan(from, to)}`;
+    return formatPeriodSpan(from, to);
+  }
+  if (selectedRange === "month") {
+    return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(from);
+  }
   return "All recorded work";
 }
 
@@ -393,6 +526,39 @@ function dayHeading(day) {
   if (day === today) return "Today";
   if (day === today - 86_400_000) return "Yesterday";
   return new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric" }).format(day);
+}
+
+function ledgerPageNumbers(totalPages) {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1);
+  const pages = new Set([1, totalPages, ledgerPageIndex, ledgerPageIndex - 1, ledgerPageIndex + 1, ledgerPageIndex - 2, ledgerPageIndex + 2]);
+  return [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b);
+}
+
+function ledgerPagination(totalPages) {
+  const pages = ledgerPageNumbers(totalPages);
+  let pageControls = "";
+  for (let index = 0; index < pages.length; index += 1) {
+    const page = pages[index];
+    if (index > 0 && page - pages[index - 1] > 1) {
+      pageControls += '<span class="ledger-page-ellipsis" aria-hidden="true">…</span>';
+    }
+    pageControls += `<button type="button" class="ledger-page-number${page === ledgerPageIndex ? " active" : ""}" data-ledger-page="${page}" aria-label="Page ${page}" ${page === ledgerPageIndex ? 'aria-current="page"' : ""}>${page}</button>`;
+  }
+
+  return `<div class="ledger-pagination">
+    <label class="ledger-page-size">
+      <span>Per page</span>
+      <select id="history-page-size" aria-label="Entries per page">
+        ${HISTORY_PAGE_SIZES.map((size) => `<option value="${size}" ${historyPageSize === size ? "selected" : ""}>${size}</option>`).join("")}
+      </select>
+    </label>
+    <div class="ledger-page-controls" role="navigation" aria-label="Ledger pages">
+      <button type="button" class="ledger-page-nav" data-ledger-page="${ledgerPageIndex - 1}" ${ledgerPageIndex <= 1 ? "disabled" : ""} aria-label="Previous page"><span class="flip">${icon("chevron", 15)}</span> Prev</button>
+      ${pageControls}
+      <button type="button" class="ledger-page-nav" data-ledger-page="${ledgerPageIndex + 1}" ${ledgerPageIndex >= totalPages ? "disabled" : ""} aria-label="Next page">Next ${icon("chevron", 15)}</button>
+    </div>
+    <span class="ledger-page-status">Page ${ledgerPageIndex} of ${totalPages}</span>
+  </div>`;
 }
 
 function workLedger(sessions) {
@@ -434,19 +600,32 @@ function workLedger(sessions) {
   }).join("")}</div>`;
 }
 
-function activityPulse() {
-  const today = startOfDay();
-  const values = Array.from({ length: 7 }, (_, index) => {
-    const day = today - (6 - index) * 86_400_000;
-    return {
+function activityPulse(from = startOfWeek(), to = shiftDays(startOfWeek(), 7)) {
+  const earliest = startOfDay(Math.max(0, from || 0));
+  const safeTo = Number.isFinite(to) && to < 8.64e15 ? to : Date.now() + 1;
+  const periodLast = startOfDay(Math.min(safeTo, Date.now() + 1) - 1);
+  const lastDay = selectedRange === "week" ? startOfDay(safeTo - 1) : periodLast;
+  let firstDay = selectedRange === "week" ? earliest : shiftDays(lastDay, -6);
+  if (firstDay < earliest) firstDay = earliest;
+  const values = [];
+  for (let day = firstDay; day <= lastDay; day = shiftDays(day, 1)) {
+    values.push({
       day,
-      value: totalBetween(day, day + 86_400_000),
+      value: totalBetween(day, shiftDays(day, 1)),
       label: new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(day).slice(0, 2)
-    };
-  });
+    });
+  }
+  if (!values.length) {
+    values.push({ day: lastDay, value: 0, label: new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(lastDay).slice(0, 2) });
+  }
   const goal = (appState.settings.dailyGoalHours || 8) * 3_600_000;
+  const pulseTitle = selectedRange === "week"
+    ? "Week pulse"
+    : selectedRange === "month"
+      ? "Month-end pulse"
+      : "Seven-day pulse";
   return `<section class="pulse-card">
-    <div class="insight-title"><div><span class="section-kicker">RHYTHM</span><h3>Seven-day pulse</h3></div><span>${formatDuration(values.reduce((sum, item) => sum + item.value, 0), true)}</span></div>
+    <div class="insight-title"><div><span class="section-kicker">RHYTHM</span><h3>${pulseTitle}</h3></div><span>${formatDuration(values.reduce((sum, item) => sum + item.value, 0), true)}</span></div>
     <div class="pulse-bars">${values.map((item) => `<div title="${formatDuration(item.value)} on ${formatDay(item.day)}"><span><i style="height:${Math.max(item.value ? 7 : 2, Math.min(100, item.value / goal * 100))}%"></i></span><em>${item.label}</em></div>`).join("")}</div>
     <div class="goal-key"><i></i><span>Bars are measured against your ${appState.settings.dailyGoalHours || 8}h daily goal.</span></div>
   </section>`;
@@ -466,29 +645,52 @@ function projectBreakdown(sessions) {
   </section>`;
 }
 
+function pomodoroStatusLabel(tracker, onBreak, paused, overloaded) {
+  if (!tracker) return "Ready to focus";
+  if (paused) return "Paused";
+  if (overloaded) return onBreak ? "Extra rest" : "Overtime · keep going";
+  if (onBreak) return "Breathe and reset";
+  return "Stay with it";
+}
+
+function extendChipButton() {
+  return `<button type="button" class="extend-chip" data-action="extend-2" title="Add 2 minutes of overtime" aria-label="Add 2 minutes">
+    <strong>+2</strong><span>min</span>
+  </button>`;
+}
+
 function pomodoroPage() {
   const tracker = appState.tracker;
-  const isPomodoro = tracker?.kind === "pomodoro" || tracker?.kind === "break";
+  const onBreak = trackerIsBreak();
+  const paused = trackerIsPaused();
+  const overloaded = trackerIsOverloaded();
+  const phaseName = onBreak
+    ? (tracker.phase === "long-break" ? "LONG BREAK" : "SHORT BREAK")
+    : "DEEP FOCUS";
   const duration = tracker ? (tracker.remainingMs ?? tracker.elapsedMs) : appState.settings.workMinutes * 60_000;
   const total = tracker?.endsAt ? tracker.endsAt - tracker.startedAt : appState.settings.workMinutes * 60_000;
   const progress = tracker?.endsAt ? Math.max(0, Math.min(100, (tracker.remainingMs / total) * 100)) : 100;
+  const round = currentPomodoroRound();
+  const cycle = appState.settings.roundsBeforeLongBreak;
   return shell(`<div class="pomodoro-layout">
-    <section class="focus-stage">
-      <div class="phase-pill">${tracker?.kind === "break" ? "RECOVERY" : "DEEP FOCUS"} · ROUND ${(appState.pomodoroRound % appState.settings.roundsBeforeLongBreak) + 1} OF ${appState.settings.roundsBeforeLongBreak}</div>
-      <div class="focus-ring ${trackerIsPaused() ? "paused" : ""}" style="--progress:${progress}">
-        <div><strong data-dynamic="tracker-time">${formatClock(duration)}</strong><span>${trackerIsPaused() ? "Paused" : tracker?.kind === "break" ? "Breathe and reset" : tracker ? "Stay with it" : "Ready to focus"}</span></div>
+    <section class="focus-stage ${onBreak ? "is-break" : tracker ? "is-focus" : ""} ${overloaded ? "is-overloaded" : ""}">
+      <div class="phase-pill ${onBreak ? "is-break" : ""} ${overloaded ? "is-overloaded" : ""}">${phaseName} · ROUND ${round} OF ${cycle}${overloaded ? " · +TIME" : ""}</div>
+      <div class="focus-ring ${paused ? "paused" : ""} ${onBreak ? "is-break" : ""} ${overloaded ? "is-overloaded" : ""} ${tracker && !paused ? "is-ticking" : ""}" style="--progress:${progress}">
+        <i class="focus-ring-cap" aria-hidden="true"></i>
+        <div><strong data-dynamic="tracker-time">${formatClock(duration)}</strong><span data-dynamic="focus-status">${pomodoroStatusLabel(tracker, onBreak, paused, overloaded)}</span></div>
       </div>
       <div class="focus-inputs">
-        <input class="focus-task-input" id="focus-task" placeholder="What deserves your full attention?" value="${escapeHtml(tracker?.task || "")}" ${tracker ? "disabled" : ""}/>
-        <input class="focus-task-input focus-project-input" id="focus-project" placeholder="Project / area" value="${escapeHtml(tracker?.project || "")}" ${tracker ? "disabled" : ""}/>
+        <input class="focus-task-input" id="focus-task" placeholder="What deserves your full attention?" value="${escapeHtml(stickyFocusTask())}" ${tracker ? "disabled" : ""}/>
+        <input class="focus-task-input focus-project-input" id="focus-project" placeholder="Project / area" value="${escapeHtml(stickyFocusProject())}" ${tracker ? "disabled" : ""}/>
       </div>
       ${tracker
         ? `<div class="focus-actions">
              <button class="button secondary" data-action="${trackerIsPaused() ? "resume" : "pause"}">${icon(trackerIsPaused() ? "play" : "pause", 18)} ${trackerIsPaused() ? "Resume" : "Pause"}</button>
+             ${extendChipButton()}
              <button class="button primary large" data-action="stop">${icon("stop", 20)} End ${tracker.kind === "break" ? "break" : "focus session"}</button>
            </div>`
         : `<button class="button primary large" data-action="start-pomodoro">${icon("play", 20)} Start focus session</button>`}
-      <p class="quiet-note">Completed focus rounds are added to your work history automatically.</p>
+      <p class="quiet-note">Your focus note sticks until you change it — saved when you leave the field or start. Completed rounds go to work history automatically.</p>
     </section>
     <aside class="pomodoro-aside">
       <div class="aside-card">
@@ -507,91 +709,315 @@ function pomodoroPage() {
   </div>`);
 }
 
-function settingsPage() {
-  const s = appState.settings;
-  return shell(`<form id="settings-form" class="settings-layout">
-    <section class="settings-card">
-      <div class="settings-heading"><span class="settings-icon">${icon("focus", 20)}</span><div><h2>Pomodoro rhythm</h2><p>Choose a pace that helps you stay fresh.</p></div></div>
-      <div class="field-grid">
-        ${numberField("workMinutes", "Focus", s.workMinutes, "minutes")}
-        ${numberField("shortBreakMinutes", "Short break", s.shortBreakMinutes, "minutes")}
-        ${numberField("longBreakMinutes", "Long break", s.longBreakMinutes, "minutes")}
-        ${numberField("roundsBeforeLongBreak", "Long break after", s.roundsBeforeLongBreak, "rounds")}
-      </div>
-      ${toggleField("autoStartBreaks", "Start breaks automatically", "Move into recovery as soon as a focus round ends.", s.autoStartBreaks)}
-    </section>
-    <section class="settings-card">
-      <div class="settings-heading"><span class="settings-icon">${icon("external", 20)}</span><div><h2>Desktop companion</h2><p>Keep your current focus visible while you work.</p></div></div>
-      <label class="field companion-style"><span>Floating style</span><select name="widgetDisplay">
-        <option value="pet" ${s.widgetDisplay === "pet" || !s.widgetDisplay ? "selected" : ""}>Focus buddy - smallest</option>
-        <option value="compact" ${s.widgetDisplay === "compact" ? "selected" : ""}>Compact timer strip</option>
-        <option value="full" ${s.widgetDisplay === "full" ? "selected" : ""}>Full timer card</option>
-      </select></label>
-      <div class="pet-choice">
-        <div class="pet-choice-heading"><span>Choose your focus buddy</span><button type="button" class="icon-button info" title="CSS-drawn companions stay sharp and add no image weight.">${icon("info", 16)}</button></div>
-        ${petPicker(s.petStyle || "cat")}
-      </div>
-      <label class="buddy-size-control">
-        <div><span>Focus Buddy size</span><button type="button" class="icon-button info" title="Adjusts the collapsed companion icon. The expanded overview keeps its carefully spaced layout.">${icon("info", 16)}</button></div>
-        <div class="buddy-size-slider"><span class="size-dot small"></span><input id="buddy-size" name="buddySize" type="range" min="${BUDDY_SIZE_MIN}" max="${BUDDY_SIZE_MAX}" step="2" value="${s.buddySize || 62}"/><span class="size-dot large"></span><output id="buddy-size-output">${s.buddySize || 62}px</output></div>
-      </label>
-      <div class="drop-video-control">
-        <div class="pet-choice-heading"><span>Drop animation video</span><button type="button" class="icon-button info" title="When you drag and drop the Focus Buddy, this video plays once, then the buddy returns.">${icon("info", 16)}</button></div>
-        <div class="drop-video-row">
-          <button type="button" class="button secondary" data-action="choose-drop-video">${s.petDropVideo ? "Change video" : "Choose video"}</button>
-          ${s.petDropVideo ? `<button type="button" class="button danger-outline" data-action="clear-drop-video">Remove</button>` : ""}
-        </div>
-        <p class="drop-video-status">${s.petDropVideo ? `Ready: ${escapeHtml(petDropVideoLabel(s.petDropVideo))}` : "No video selected — drop will only move the buddy."}</p>
-        <label class="buddy-size-control drop-video-size-control">
-          <div><span>Drop video size</span><button type="button" class="icon-button info" title="Independent from Focus Buddy size. Use this if the drop clip looks smaller or larger than your companion.">${icon("info", 16)}</button></div>
-          <div class="buddy-size-slider"><span class="size-dot small"></span><input id="drop-video-size" name="petDropVideoSize" type="range" min="${PET_DROP_VIDEO_SIZE_MIN}" max="${PET_DROP_VIDEO_SIZE_MAX}" step="10" value="${clampPetDropVideoSize(s.petDropVideoSize)}"/><span class="size-dot large"></span><output id="drop-video-size-output">${clampPetDropVideoSize(s.petDropVideoSize)}px</output></div>
-        </label>
-        ${toggleField("petDropVideoSound", "Play video sound", "Allow audio when the drop animation plays. Leave off to keep drops silent.", Boolean(s.petDropVideoSound))}
-      </div>
-      ${toggleField("alwaysOnTop", "Keep mini timer above other apps", "The compact timer stays visible over your current window.", s.alwaysOnTop)}
-      ${toggleField("launchWidget", "Show mini timer on launch", "Open the compact timer when Focus Hours starts.", s.launchWidget)}
-      <button type="button" class="button secondary widget-preview" data-action="show-widget">${icon("external", 18)} Show mini timer now</button>
-    </section>
-    <section class="settings-card">
-      <div class="settings-heading"><span class="settings-icon">${icon("history", 20)}</span><div><h2>Work log target</h2><p>Use a realistic target to give your history useful context.</p></div></div>
-      <div class="field-grid compact-fields">
-        ${numberField("dailyGoalHours", "Daily focused-work goal", s.dailyGoalHours || 8, "hours")}
-      </div>
-    </section>
-    ${dataControlsCard()}
-    <section class="settings-card">
-      <div class="settings-heading"><span class="settings-icon">${icon("spark", 20)}</span><div><h2>Keyboard shortcuts</h2><p>Control Focus Hours without leaving the app you are working in.</p></div></div>
-      ${shortcutList()}
-    </section>
-    <div class="settings-save"><span>Changes are saved only on this device.</span><button class="button primary" type="submit">Save preferences</button></div>
-  </form>`);
+function settingsNavItem(id, label, iconName, hint) {
+  return `<button type="button" class="settings-nav-item ${settingsSection === id ? "active" : ""}" data-settings-section="${id}" aria-pressed="${settingsSection === id}">
+    <span class="settings-nav-icon">${icon(iconName, 17)}</span>
+    <span class="settings-nav-text"><strong>${label}</strong><em>${hint}</em></span>
+  </button>`;
 }
 
-function dataControlsCard() {
+function settingsRhythmCard() {
+  const s = appState.settings;
+  return `<section class="settings-card">
+    <div class="settings-heading"><span class="settings-icon">${icon("focus", 20)}</span><div><h2>Focus rhythm</h2><p>Choose a pace that helps you stay fresh.</p></div></div>
+    <div class="field-grid">
+      ${numberField("workMinutes", "Focus", s.workMinutes, "minutes")}
+      ${numberField("shortBreakMinutes", "Short break", s.shortBreakMinutes, "minutes")}
+      ${numberField("longBreakMinutes", "Long break", s.longBreakMinutes, "minutes")}
+      ${numberField("roundsBeforeLongBreak", "Long break after", s.roundsBeforeLongBreak, "rounds")}
+    </div>
+    ${toggleField("autoStartBreaks", "Start breaks automatically", "Move into recovery as soon as a focus round ends.", s.autoStartBreaks)}
+    ${toggleField("timerEndSound", "Play sound when a timer ends", "Hear a short chime when a focus round or break finishes.", s.timerEndSound !== false)}
+    <div class="settings-divider"></div>
+    <div class="settings-heading compact"><span class="settings-icon">${icon("history", 20)}</span><div><h2>Work log target</h2><p>Give your history a realistic daily context.</p></div></div>
+    <div class="field-grid compact-fields">
+      ${numberField("dailyGoalHours", "Daily focused-work goal", s.dailyGoalHours || 8, "hours")}
+    </div>
+  </section>`;
+}
+
+function settingsCompanionCard() {
+  const s = appState.settings;
+  return `<section class="settings-card">
+    <div class="settings-heading"><span class="settings-icon">${icon("external", 20)}</span><div><h2>Desktop companion</h2><p>Keep your current focus visible while you work.</p></div></div>
+    <label class="field companion-style"><span>Floating style</span><select name="widgetDisplay">
+      <option value="pet" ${s.widgetDisplay === "pet" || !s.widgetDisplay ? "selected" : ""}>Focus buddy - smallest</option>
+      <option value="compact" ${s.widgetDisplay === "compact" ? "selected" : ""}>Compact timer strip</option>
+      <option value="full" ${s.widgetDisplay === "full" ? "selected" : ""}>Full timer card</option>
+    </select></label>
+    <div class="pet-choice">
+      <div class="pet-choice-heading"><span>Choose your focus buddy</span><button type="button" class="icon-button info" title="CSS-drawn companions stay sharp and add no image weight.">${icon("info", 16)}</button></div>
+      ${petPicker(s.petStyle || "cat")}
+    </div>
+    <label class="buddy-size-control">
+      <div><span>Focus Buddy size</span><button type="button" class="icon-button info" title="Adjusts the collapsed companion icon. The expanded overview keeps its carefully spaced layout.">${icon("info", 16)}</button></div>
+      <div class="buddy-size-slider"><span class="size-dot small"></span><input id="buddy-size" name="buddySize" type="range" min="${BUDDY_SIZE_MIN}" max="${BUDDY_SIZE_MAX}" step="2" value="${s.buddySize || 62}"/><span class="size-dot large"></span><output id="buddy-size-output">${s.buddySize || 62}px</output></div>
+    </label>
+    <div class="drop-video-control">
+      <div class="pet-choice-heading"><span>Drop animation video</span><button type="button" class="icon-button info" title="When you drag and drop the Focus Buddy, this video plays once, then the buddy returns.">${icon("info", 16)}</button></div>
+      <div class="drop-video-row">
+        <button type="button" class="button secondary" data-action="choose-drop-video">${s.petDropVideo ? "Change video" : "Choose video"}</button>
+        ${s.petDropVideo ? `<button type="button" class="button danger-outline" data-action="clear-drop-video">Remove</button>` : ""}
+      </div>
+      <p class="drop-video-status">${s.petDropVideo ? `Ready: ${escapeHtml(petDropVideoLabel(s.petDropVideo))}` : "No video selected — drop will only move the buddy."}</p>
+      <label class="buddy-size-control drop-video-size-control">
+        <div><span>Drop video size</span><button type="button" class="icon-button info" title="Independent from Focus Buddy size. Use this if the drop clip looks smaller or larger than your companion.">${icon("info", 16)}</button></div>
+        <div class="buddy-size-slider"><span class="size-dot small"></span><input id="drop-video-size" name="petDropVideoSize" type="range" min="${PET_DROP_VIDEO_SIZE_MIN}" max="${PET_DROP_VIDEO_SIZE_MAX}" step="10" value="${clampPetDropVideoSize(s.petDropVideoSize)}"/><span class="size-dot large"></span><output id="drop-video-size-output">${clampPetDropVideoSize(s.petDropVideoSize)}px</output></div>
+      </label>
+      ${toggleField("petDropVideoSound", "Play video sound", "Allow audio when the drop animation plays. Leave off to keep drops silent.", Boolean(s.petDropVideoSound))}
+    </div>
+    ${toggleField("alwaysOnTop", "Keep companion above everything", "Stays on top of other apps and the Windows taskbar.", s.alwaysOnTop)}
+    ${toggleField("launchWidget", "Show mini timer on launch", "Open the compact timer when Focus Hours starts.", s.launchWidget)}
+    <button type="button" class="button secondary widget-preview" data-action="show-widget">${icon("external", 18)} Show mini timer now</button>
+  </section>`;
+}
+
+function settingsShortcutsCard() {
+  return `<section class="settings-card">
+    <div class="settings-heading"><span class="settings-icon">${icon("spark", 20)}</span><div><h2>Keyboard shortcuts</h2><p>Control Focus Hours without leaving the app you are working in.</p></div></div>
+    ${shortcutList()}
+  </section>`;
+}
+
+function whatsappSettings() {
+  return appState.settings?.integrations?.whatsapp || {
+    enabled: false,
+    accessToken: "",
+    phoneNumberId: "",
+    recipientNumber: "",
+    alertTemplateName: "",
+    alertTemplateLanguage: "en",
+    lastStatus: "idle",
+    lastCheckedAt: null,
+    lastError: "",
+    lastMessageId: "",
+    notifications: Object.fromEntries(
+      Object.entries(WHATSAPP_MESSAGE_DEFAULTS).map(([id, message]) => [id, {
+        enabled: ["focusEnd", "breakStart", "breakEnd"].includes(id),
+        message
+      }])
+    )
+  };
+}
+
+function whatsappStatusMeta(wa) {
+  if (!wa.accessToken || !wa.phoneNumberId || !wa.recipientNumber) {
+    return { tone: "idle", label: "Not configured" };
+  }
+  if (wa.lastStatus === "connected") return { tone: "connected", label: "Connected" };
+  if (wa.lastStatus === "error") return { tone: "error", label: "Failed" };
+  return { tone: "idle", label: "Ready to test" };
+}
+
+async function collectAndSaveWhatsAppSettings() {
+  const form = document.querySelector("#settings-form");
+  if (!form) throw new Error("Open Integrations settings first.");
+  const current = whatsappSettings();
+  const notifications = {};
+  for (const event of WHATSAPP_EVENT_META) {
+    const enabled = form.querySelector(`[name="wa-enabled-${event.id}"]`)?.checked || false;
+    const message = form.querySelector(`[name="wa-message-${event.id}"]`)?.value?.trim()
+      || WHATSAPP_MESSAGE_DEFAULTS[event.id];
+    notifications[event.id] = { enabled, message: message.slice(0, 500) };
+  }
+  await api.updateSettings({
+    integrations: {
+      whatsapp: {
+        ...current,
+        enabled: Boolean(form.whatsappEnabled?.checked),
+        accessToken: form.whatsappAccessToken?.value?.trim() || "",
+        phoneNumberId: form.whatsappPhoneNumberId?.value?.trim() || "",
+        recipientNumber: (form.whatsappRecipientNumber?.value || "").replace(/\D/g, ""),
+        alertTemplateName: form.whatsappAlertTemplateName?.value?.trim() || "",
+        alertTemplateLanguage: form.whatsappAlertTemplateLanguage?.value?.trim() || "en",
+        notifications
+      }
+    }
+  });
+}
+
+function settingsIntegrationsCard() {
+  const wa = whatsappSettings();
+  const status = whatsappStatusMeta(wa);
+  const notifications = wa.notifications || {};
+  return `<div class="settings-stack">
+    <section class="settings-card">
+      <div class="settings-heading integration-heading">
+        <div class="integration-heading-copy">
+          <span class="settings-icon">${icon("link", 20)}</span>
+          <div>
+            <div class="heading-with-help">
+              <h2>WhatsApp</h2>
+              <span class="integration-status is-${status.tone}">${status.label}</span>
+            </div>
+            <p>Send timer alerts through Meta WhatsApp Cloud API.</p>
+          </div>
+        </div>
+        <div class="integration-heading-actions">
+          <button type="button" class="button secondary" data-action="test-whatsapp">${icon("external", 16)} Test connection</button>
+          <button type="button" class="button primary" data-action="sample-whatsapp">${icon("spark", 16)} Send sample alert</button>
+        </div>
+      </div>
+      ${wa.lastError ? `<p class="integration-error">${escapeHtml(wa.lastError)}</p>` : `<p class="quiet-note">If alerts do not arrive, Meta is usually blocking free-form text. Set a template below, or message your business WhatsApp from the recipient phone first.</p>`}
+      ${toggleField("whatsappEnabled", "Enable WhatsApp alerts", "Allow Focus Hours to message your WhatsApp number when configured events fire.", Boolean(wa.enabled))}
+      <div class="integration-block">
+        <span class="integration-block-label">Connection</span>
+        <div class="field-grid integration-fields">
+          <label class="field full-span"><span>Access token</span><input type="password" name="whatsappAccessToken" autocomplete="off" placeholder="WHATSAPP_TOKEN" value="${escapeHtml(wa.accessToken || "")}"/></label>
+          <label class="field"><span>Phone number ID</span><input type="text" name="whatsappPhoneNumberId" autocomplete="off" placeholder="From Meta" value="${escapeHtml(wa.phoneNumberId || "")}"/></label>
+          <label class="field"><span>Recipient number <em>country code, digits only</em></span><input type="text" name="whatsappRecipientNumber" autocomplete="off" placeholder="918527192366" value="${escapeHtml(wa.recipientNumber || "")}"/></label>
+        </div>
+      </div>
+      <div class="integration-block">
+        <span class="integration-block-label">Reliable delivery template</span>
+        <p class="integration-block-copy">Meta blocks ordinary chat text unless that phone messaged you in the last 24 hours. Create an approved WhatsApp template in Meta with one body variable <code>{{1}}</code>, then put its name here so timer alerts can always send.</p>
+        <div class="field-grid integration-fields">
+          <label class="field"><span>Template name</span><input type="text" name="whatsappAlertTemplateName" autocomplete="off" placeholder="focus_hours_alert" value="${escapeHtml(wa.alertTemplateName || "")}"/></label>
+          <label class="field"><span>Language code</span><input type="text" name="whatsappAlertTemplateLanguage" autocomplete="off" placeholder="en" value="${escapeHtml(wa.alertTemplateLanguage || "en")}"/></label>
+        </div>
+      </div>
+    </section>
+    <section class="settings-card">
+      <div class="settings-heading">
+        <span class="settings-icon">${icon("spark", 20)}</span>
+        <div><h2>Notification events</h2><p>Choose which moments ping WhatsApp, and edit each message.</p></div>
+      </div>
+      <p class="placeholder-help">Use <code>{{task}}</code>, <code>{{project}}</code>, <code>{{phase}}</code>, <code>{{round}}</code>, <code>{{duration}}</code> in messages.</p>
+      <div class="whatsapp-event-list">
+        ${WHATSAPP_EVENT_META.map((event) => {
+          const item = notifications[event.id] || { enabled: false, message: WHATSAPP_MESSAGE_DEFAULTS[event.id] };
+          return `<article class="whatsapp-event-row">
+            <div class="whatsapp-event-head">
+              <div>
+                <strong>${event.label}</strong>
+                <span>${event.hint}</span>
+              </div>
+              <label class="mini-toggle"><input type="checkbox" name="wa-enabled-${event.id}" ${item.enabled ? "checked" : ""}/><i></i></label>
+            </div>
+            <label class="field">
+              <span>Message</span>
+              <textarea name="wa-message-${event.id}" rows="2" maxlength="500">${escapeHtml(item.message || WHATSAPP_MESSAGE_DEFAULTS[event.id])}</textarea>
+            </label>
+            <button type="button" class="text-button" data-action="reset-whatsapp-message" data-event="${event.id}">Reset to default</button>
+          </article>`;
+        }).join("")}
+      </div>
+    </section>
+  </div>`;
+}
+
+function auditExpiresAt(deletedAt) {
+  const days = Math.max(1, Number(appState.settings.deletedRetentionDays) || 2);
+  return Number(deletedAt || 0) + days * 86_400_000;
+}
+
+function formatRelativeExpiry(expiresAt) {
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) return "Expiring soon";
+  const hours = Math.ceil(remaining / 3_600_000);
+  if (hours < 24) return `Expires in ${hours}h`;
+  const days = Math.ceil(hours / 24);
+  return `Expires in ${days} day${days === 1 ? "" : "s"}`;
+}
+
+function recentlyDeletedCard() {
+  const deleted = [...(appState.deletedSessions || [])].sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
+  const retention = Math.max(1, Number(appState.settings.deletedRetentionDays) || 2);
+  return `<section class="settings-card">
+    <div class="settings-heading">
+      <span class="settings-icon">${icon("history", 20)}</span>
+      <div><h2>Recently deleted</h2><p>Deleted work stays recoverable here for ${retention} day${retention === 1 ? "" : "s"}, then is removed automatically.</p></div>
+    </div>
+    <div class="field-grid compact-fields">
+      ${numberField("deletedRetentionDays", "Keep deleted entries for", retention, "days", { min: 1, max: 30 })}
+    </div>
+    ${deleted.length
+      ? `<div class="audit-list">
+          ${deleted.map((session) => {
+            const expiresAt = auditExpiresAt(session.deletedAt);
+            return `<article class="audit-row">
+              <div>
+                <strong>${escapeHtml(session.task || "Focused work")}</strong>
+                <span>${escapeHtml(session.project || "Unsorted")} · ${formatDuration(session.durationMs, true)} · deleted ${formatDay(session.deletedAt || Date.now())}</span>
+                <em>${formatRelativeExpiry(expiresAt)}</em>
+              </div>
+              <div class="audit-actions">
+                <button type="button" class="button secondary" data-action="restore-session" data-id="${escapeHtml(session.id)}">Restore</button>
+                <button type="button" class="button danger-outline" data-action="purge-session" data-id="${escapeHtml(session.id)}">Delete forever</button>
+              </div>
+            </article>`;
+          }).join("")}
+        </div>
+        <div class="audit-footer">
+          <button type="button" class="text-button danger-text" data-action="purge-all-deleted">Clear all deleted entries</button>
+        </div>`
+      : `<div class="audit-empty"><p>No recently deleted sessions. Entries you remove from History will appear here.</p></div>`}
+  </section>`;
+}
+
+function settingsDataCard() {
   const defaultRange = deletionRangeForPeriod("month");
   const impact = deletionImpact(defaultRange);
   const today = toDateTimeLocal(Date.now()).slice(0, 10);
   const weekAgo = toDateTimeLocal(startOfDay() - 6 * 86_400_000).slice(0, 10);
-  return `<section class="settings-card data-controls-card">
-    <div class="settings-heading">
-      <span class="settings-icon danger-icon">${icon("trash", 20)}</span>
-      <div><div class="heading-with-help"><h2>Data controls</h2><button type="button" class="icon-button info" title="Deletes only completed work-ledger sessions in the selected period. Preferences, companion settings, and an active timer are preserved.">${icon("info", 16)}</button></div><p>Reset recorded work for a specific period.</p></div>
-    </div>
-    <div class="data-control-row">
-      <label class="field"><span>Period to reset</span><select id="data-period">
-        <option value="today">Today</option>
-        <option value="week">Last 7 days</option>
-        <option value="month" selected>This month</option>
-        <option value="custom">Custom range</option>
-        <option value="all">All time</option>
-      </select></label>
-      <div class="custom-date-range" id="custom-date-range" hidden>
-        <label class="field"><span>From</span><input id="data-from" type="date" value="${weekAgo}"/></label>
-        <label class="field"><span>Through</span><input id="data-to" type="date" value="${today}"/></label>
+  return `<div class="settings-stack">
+    <section class="settings-card">
+      <div class="settings-heading"><span class="settings-icon">${icon("layers", 20)}</span><div><h2>Backup & restore</h2><p>Export a local backup, or import one from another machine.</p></div></div>
+      <div class="backup-actions">
+        <button type="button" class="button secondary" data-action="export-data">${icon("external", 16)} Export backup</button>
+        <button type="button" class="button primary" data-action="import-data">${icon("plus", 16)} Import backup</button>
       </div>
-      <div class="deletion-impact"><span id="deletion-impact">${impactText(impact)}</span><button type="button" class="button danger-outline" data-action="prepare-data-reset" ${impact.count ? "" : "disabled"}>${icon("trash", 16)} Reset records</button></div>
+      <p class="quiet-note">Backups include sessions, deleted audit entries, preferences, and notes. An active timer is never overwritten.</p>
+    </section>
+    <section class="settings-card data-controls-card">
+      <div class="settings-heading">
+        <span class="settings-icon danger-icon">${icon("trash", 20)}</span>
+        <div><div class="heading-with-help"><h2>Reset work records</h2><button type="button" class="icon-button info" title="Moves completed work-ledger sessions into Recently deleted. Preferences, companion settings, and an active timer are preserved.">${icon("info", 16)}</button></div><p>Clear recorded work for a period. Entries stay recoverable for a few days.</p></div>
+      </div>
+      <div class="data-control-row">
+        <label class="field"><span>Period to reset</span><select id="data-period">
+          <option value="today">Today</option>
+          <option value="week">Last 7 days</option>
+          <option value="month" selected>This month</option>
+          <option value="custom">Custom range</option>
+          <option value="all">All time</option>
+        </select></label>
+        <div class="custom-date-range" id="custom-date-range" hidden>
+          <label class="field"><span>From</span><input id="data-from" type="date" value="${weekAgo}"/></label>
+          <label class="field"><span>Through</span><input id="data-to" type="date" value="${today}"/></label>
+        </div>
+        <div class="deletion-impact"><span id="deletion-impact">${impactText(impact)}</span><button type="button" class="button danger-outline" data-action="prepare-data-reset" ${impact.count ? "" : "disabled"}>${icon("trash", 16)} Reset records</button></div>
+      </div>
+    </section>
+    ${recentlyDeletedCard()}
+  </div>`;
+}
+
+function settingsPage() {
+  const panel = settingsSection === "companion"
+    ? settingsCompanionCard()
+    : settingsSection === "data"
+      ? settingsDataCard()
+      : settingsSection === "integrations"
+        ? settingsIntegrationsCard()
+        : settingsSection === "shortcuts"
+          ? settingsShortcutsCard()
+          : settingsRhythmCard();
+  const showSave = settingsSection !== "shortcuts";
+  return shell(`<form id="settings-form" class="settings-shell">
+    <aside class="settings-nav" aria-label="Preference sections">
+      <span class="settings-nav-kicker">PREFERENCES</span>
+      ${settingsNavItem("rhythm", "Focus rhythm", "focus", "Timers, breaks, goal")}
+      ${settingsNavItem("companion", "Companion", "external", "Buddy & widget")}
+      ${settingsNavItem("integrations", "Integrations", "link", "WhatsApp alerts")}
+      ${settingsNavItem("data", "Data & backup", "layers", "Export, restore, deleted")}
+      ${settingsNavItem("shortcuts", "Shortcuts", "spark", "Global keys")}
+    </aside>
+    <div class="settings-panel">
+      ${panel}
+      ${showSave ? `<div class="settings-save"><span>Changes are saved only on this device.</span><button class="button primary" type="submit">Save preferences</button></div>` : ""}
     </div>
-  </section>`;
+  </form>`);
 }
 
 function deletionRangeForPeriod(period, customFrom, customTo) {
@@ -658,17 +1084,57 @@ function openDataResetModal() {
   const impact = deletionImpact(range);
   if (!range || !impact.count) return;
   pendingDeletionRange = range;
+  const retention = Math.max(1, Number(appState.settings.deletedRetentionDays) || 2);
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
   modal.innerHTML = `<div class="modal data-reset-modal" role="dialog" aria-modal="true" aria-labelledby="reset-title">
     <div class="reset-warning-icon">${icon("trash", 22)}</div>
     <h2 id="reset-title">Reset work records?</h2>
-    <p>This permanently removes <strong>${impact.count} session${impact.count === 1 ? "" : "s"}</strong> totaling <strong>${formatDuration(impact.durationMs, true)}</strong> from ${escapeHtml(range.label)}.</p>
-    <div class="reset-preserves">${icon("info", 16)}<span>Your preferences, selected companion, shortcuts, and active timer will not be changed.</span></div>
-    <div class="modal-actions"><button type="button" class="button secondary" data-action="close-modal">Keep records</button><button type="button" class="button danger-solid" data-action="confirm-data-reset">Delete permanently</button></div>
+    <p>This moves <strong>${impact.count} session${impact.count === 1 ? "" : "s"}</strong> totaling <strong>${formatDuration(impact.durationMs, true)}</strong> from ${escapeHtml(range.label)} into Recently deleted.</p>
+    <div class="reset-preserves">${icon("info", 16)}<span>Entries stay recoverable for ${retention} day${retention === 1 ? "" : "s"}. Preferences, companion, shortcuts, and an active timer are unchanged.</span></div>
+    <div class="modal-actions"><button type="button" class="button secondary" data-action="close-modal">Keep records</button><button type="button" class="button danger-solid" data-action="confirm-data-reset">Move to deleted</button></div>
   </div>`;
   document.body.append(modal);
   modal.querySelector('[data-action="close-modal"]').focus();
+}
+
+function openSessionDeleteModal(sessionId) {
+  const session = appState.sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  pendingDeleteSessionId = sessionId;
+  const retention = Math.max(1, Number(appState.settings.deletedRetentionDays) || 2);
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal data-reset-modal" role="dialog" aria-modal="true" aria-labelledby="delete-session-title">
+    <div class="reset-warning-icon">${icon("trash", 22)}</div>
+    <h2 id="delete-session-title">Delete this session?</h2>
+    <p><strong>${escapeHtml(session.task || "Focused work")}</strong> (${formatDuration(session.durationMs, true)}) will leave your history and stay recoverable for <strong>${retention} day${retention === 1 ? "" : "s"}</strong>.</p>
+    <div class="modal-actions"><button type="button" class="button secondary" data-action="close-modal">Keep it</button><button type="button" class="button danger-solid" data-action="confirm-session-delete">Delete</button></div>
+  </div>`;
+  document.body.append(modal);
+  modal.querySelector('[data-action="close-modal"]').focus();
+}
+
+function openImportModeModal(preview) {
+  pendingImportBackup = preview.backup;
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal import-mode-modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
+    <div class="modal-header"><div><span class="section-kicker">IMPORT BACKUP</span><h2 id="import-title">How should this backup be applied?</h2></div><button type="button" class="icon-button" data-action="close-modal">${icon("close", 20)}</button></div>
+    <p class="modal-intro">Found <strong>${preview.sessionCount}</strong> session${preview.sessionCount === 1 ? "" : "s"}${preview.deletedCount ? ` and <strong>${preview.deletedCount}</strong> deleted audit entr${preview.deletedCount === 1 ? "y" : "ies"}` : ""}.</p>
+    <div class="import-mode-options">
+      <button type="button" class="import-mode-card" data-action="confirm-import" data-mode="replace">
+        <strong>Replace all</strong>
+        <span>Overwrite sessions, deleted audit, preferences, and notes with this backup. The active timer is left alone.</span>
+      </button>
+      <button type="button" class="import-mode-card" data-action="confirm-import" data-mode="merge">
+        <strong>Merge sessions</strong>
+        <span>Add sessions that are not already here. Current settings, notes, and deleted audit stay as they are.</span>
+      </button>
+    </div>
+    <div class="modal-actions"><button type="button" class="button secondary" data-action="close-modal">Cancel</button></div>
+  </div>`;
+  document.body.append(modal);
 }
 
 function aboutPage() {
@@ -746,8 +1212,8 @@ function petPicker(selected) {
   </button></div>`;
 }
 
-function numberField(name, label, value, suffix) {
-  return `<label class="field"><span>${label}</span><div class="number-control"><input type="number" min="1" max="180" name="${name}" value="${value}" required/><em>${suffix}</em></div></label>`;
+function numberField(name, label, value, suffix, { min = 1, max = 180 } = {}) {
+  return `<label class="field"><span>${label}</span><div class="number-control"><input type="number" min="${min}" max="${max}" name="${name}" value="${value}" required/><em>${suffix}</em></div></label>`;
 }
 
 function toggleField(name, title, description, checked) {
@@ -843,11 +1309,17 @@ function petDock(petStyle) {
   if (petVideoPlaying && appState.settings.petDropVideo) return petDropVideoShell();
   const tracker = appState.tracker;
   const paused = trackerIsPaused();
-  const state = !tracker ? "idle" : paused ? "paused" : "live";
-  const label = !tracker ? "today" : paused ? "paused" : "focusing";
-  const petButton = `<button class="pet-orb pet-${petStyle} ${tracker && !paused ? "working" : ""}" data-pet-trigger="true" title="${tracker ? `${escapeHtml(tracker.task || "Focused work")} - click to open` : "Click to open your focus buddy"}">
+  const onBreak = trackerIsBreak();
+  const overloaded = trackerIsOverloaded();
+  const state = !tracker ? "idle" : paused ? "paused" : overloaded ? "overloaded" : onBreak ? "break" : "live";
+  const label = !tracker ? "today" : paused ? "paused" : overloaded ? "over" : onBreak ? "rest" : "focus";
+  const orbMood = tracker && !paused ? (overloaded ? "overloaded" : onBreak ? "resting" : "working") : "";
+  const sessionTitle = onBreak
+    ? (tracker.phase === "long-break" ? "Long break" : "Short break")
+    : (tracker?.task || "Focused work");
+  const petButton = `<button class="pet-orb pet-${petStyle} ${orbMood}" data-pet-trigger="true" title="${tracker ? `${escapeHtml(sessionTitle)} - click to open` : "Click to open your focus buddy"}">
     ${petVisual(petStyle)}
-    ${tracker ? '<span class="pet-live"></span>' : ""}
+    ${tracker ? `<span class="pet-live ${onBreak ? "is-break" : ""} ${overloaded ? "is-overloaded" : ""}"></span>` : ""}
   </button>`;
   return `<div class="pet-dock">
     <div class="pet-halo is-${state}">
@@ -856,7 +1328,7 @@ function petDock(petStyle) {
       <span class="halo-label">${label}</span>
       ${tracker
         ? `<span class="halo-actions">
-            <button data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume focus" : "Pause focus"}" aria-label="${paused ? "Resume focus" : "Pause focus"}">${icon(paused ? "play" : "pause", 13)}</button>
+            <button data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume" : "Pause"}" aria-label="${paused ? "Resume" : "Pause"}">${icon(paused ? "play" : "pause", 13)}</button>
             <button class="halo-stop" data-action="stop" title="Stop and save" aria-label="Stop and save">${icon("stop", 13)}</button>
           </span>`
         : ""}
@@ -890,6 +1362,19 @@ function widgetView() {
   const mode = appState.settings.widgetDisplay || "pet";
   const petStyle = appState.settings.petStyle || "cat";
   const paused = trackerIsPaused();
+  const onBreak = trackerIsBreak();
+  const overloaded = trackerIsOverloaded();
+  const phaseBadge = paused
+    ? "Paused"
+    : overloaded
+      ? (onBreak ? "Extra rest" : "Overtime")
+      : onBreak
+        ? "Rest"
+        : "Focus";
+  const statusDot = tracker ? (paused ? "paused" : overloaded ? "overloaded" : onBreak ? "break" : "active") : "";
+  const taskFallback = onBreak
+    ? (tracker.phase === "long-break" ? "Long break" : "Short break")
+    : "Ready to focus";
 
   if (mode === "pet" && !petOpen) {
     if (petVideoPlaying) return petDock(petStyle);
@@ -907,44 +1392,44 @@ function widgetView() {
   }
 
   if (mode === "pet") {
-    return `<div class="pet-panel ${tracker ? "is-running" : ""} ${paused ? "is-paused" : ""} ${petNotesOpen ? "notes-open" : ""}">
+    return `<div class="pet-panel ${tracker ? "is-running" : ""} ${paused ? "is-paused" : ""} ${onBreak ? "is-break" : ""} ${overloaded ? "is-overloaded" : ""} ${petNotesOpen ? "notes-open" : ""}">
       <div class="pet-panel-drag">
         <span class="pet-brand"><i></i>Focus Buddy</span>
         <div class="pet-panel-drag-end">
-          ${tracker ? `<em class="pet-panel-state">${paused ? "Paused" : "Live"}</em>` : ""}
+          ${tracker ? `<em class="pet-panel-state ${overloaded ? "is-overloaded" : ""}">${phaseBadge}</em>` : ""}
           <button data-action="open-dashboard" title="Open dashboard" aria-label="Open dashboard">${icon("external", 15)}</button>
           <button data-action="collapse-pet" title="Minimize to buddy" aria-label="Minimize companion">${icon("close", 15)}</button>
         </div>
       </div>
       <div class="pet-panel-body">
         <span class="mini-pet pet-${petStyle}">${petStyle === "custom" && appState.settings.customPetIcon ? `<img src="${escapeHtml(appState.settings.customPetIcon)}" alt="Custom focus buddy"/>` : "<i></i><i></i><em></em>"}</span>
-        <div class="pet-status"><strong data-dynamic="tracker-time">${formatClock(displayMs)}</strong><span data-dynamic="tracker-task">${escapeHtml(tracker?.task || "Ready to focus")}</span><small data-dynamic="today-total">${formatDuration(todayTotal(), true)} today</small></div>
+        <div class="pet-status"><strong data-dynamic="tracker-time">${formatClock(displayMs)}</strong><span data-dynamic="tracker-task">${escapeHtml(tracker?.task || taskFallback)}</span><small data-dynamic="today-total">${formatDuration(todayTotal(), true)} today</small></div>
         <div class="pet-controls">
           ${tracker
-            ? `<button data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume focus" : "Pause focus"}" aria-label="${paused ? "Resume focus" : "Pause focus"}">${icon(paused ? "play" : "pause", 19)}</button>
+            ? `<button data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume" : "Pause"}" aria-label="${paused ? "Resume" : "Pause"}">${icon(paused ? "play" : "pause", 19)}</button>
                <button class="pet-secondary-control" data-action="stop" title="Stop and save" aria-label="Stop and save timer">${icon("stop", 15)}</button>`
             : `<button data-action="start" title="Start timer" aria-label="Start timer">${icon("play", 19)}</button>`}
         </div>
       </div>
       ${tracker
-        ? `<div class="pet-ledger-context">${icon("briefcase", 13)}<span>${escapeHtml(tracker.project || "Unsorted")} &middot; ${paused ? "time so far is already in the ledger" : "saves to the work ledger when you pause or stop"}</span></div>`
-        : `<div class="pet-entry-fields"><input id="pet-task" maxlength="120" placeholder="What are you working on?" aria-label="Task name"/><input id="pet-project" maxlength="80" placeholder="Project / area" aria-label="Project or area"/></div>`}
+        ? `<div class="pet-ledger-context">${icon("briefcase", 13)}<span>${onBreak ? "Recovery time · not logged as work" : `${escapeHtml(tracker.project || "Unsorted")} &middot; ${paused ? "time so far is already in the ledger" : "saves to the work ledger when you pause or stop"}`}</span></div>`
+        : `<div class="pet-entry-fields"><input id="pet-task" maxlength="120" placeholder="What are you working on?" aria-label="Task name" value="${escapeHtml(stickyFocusTask())}"/><input id="pet-project" maxlength="80" placeholder="Project / area" aria-label="Project or area" value="${escapeHtml(stickyFocusProject())}"/></div>`}
       ${petNotesSection()}
     </div>`;
   }
 
   if (mode === "compact") {
-    return `<div class="compact-widget ${tracker ? "is-running" : ""}">
-      <div class="compact-drag"><span class="${tracker ? (paused ? "paused" : "active") : ""}"></span></div>
-      <div class="compact-time"><strong data-dynamic="tracker-time">${formatClock(displayMs)}</strong><span data-dynamic="tracker-task">${escapeHtml(tracker?.task || "Ready to focus")}</span></div>
-      <button class="compact-control" data-action="${tracker ? (paused ? "resume" : "pause") : "start"}" title="${tracker ? (paused ? "Resume focus" : "Pause focus") : "Start timer"}">${icon(tracker && !paused ? "pause" : "play", 17)}</button>
+    return `<div class="compact-widget ${tracker ? "is-running" : ""} ${onBreak ? "is-break" : ""}">
+      <div class="compact-drag"><span class="${statusDot}"></span></div>
+      <div class="compact-time"><strong data-dynamic="tracker-time">${formatClock(displayMs)}</strong><span data-dynamic="tracker-task">${escapeHtml(tracker?.task || taskFallback)}</span></div>
+      <button class="compact-control" data-action="${tracker ? (paused ? "resume" : "pause") : "start"}" title="${tracker ? (paused ? "Resume" : "Pause") : "Start timer"}">${icon(tracker && !paused ? "pause" : "play", 17)}</button>
       ${tracker ? `<button class="compact-control stop" data-action="stop" title="Stop and save">${icon("stop", 15)}</button>` : ""}
       <button class="compact-open" data-action="open-dashboard" title="Dashboard">${icon("external", 15)}</button>
       <button class="compact-hide" data-action="hide-widget" title="Hide">${icon("close", 13)}</button>
     </div>`;
   }
 
-  return `<div class="widget-shell">
+  return `<div class="widget-shell ${onBreak ? "is-break" : ""}">
     <div class="widget-drag">
       <span class="widget-brand">${icon("clock", 16)} FOCUS HOURS</span>
       <button class="widget-close" data-action="hide-widget" title="Hide mini timer">${icon("close", 15)}</button>
@@ -952,17 +1437,17 @@ function widgetView() {
     <div class="widget-content">
       <div class="widget-time">
         <strong data-dynamic="tracker-time">${formatClock(displayMs)}</strong>
-        <span data-dynamic="tracker-task">${escapeHtml(tracker?.task || "Ready to focus")}</span>
+        <span data-dynamic="tracker-task">${escapeHtml(tracker?.task || taskFallback)}</span>
       </div>
       <div class="widget-actions">
         ${tracker
-          ? `<button class="widget-control" data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume focus" : "Pause focus"}">${icon(paused ? "play" : "pause", 18)}</button>
+          ? `<button class="widget-control" data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume" : "Pause"}">${icon(paused ? "play" : "pause", 18)}</button>
              <button class="widget-control stop" data-action="stop" title="Stop and save">${icon("stop", 16)}</button>`
           : `<button class="widget-control" data-action="start" title="Start timer">${icon("play", 18)}</button>`}
         <button class="widget-open" data-action="open-dashboard" title="Open dashboard">${icon("external", 17)}</button>
       </div>
     </div>
-    <div class="widget-footer"><span data-dynamic="today-total">${formatDuration(todayTotal(), true)} today</span><i class="${tracker ? (paused ? "paused" : "active") : ""}"></i></div>
+    <div class="widget-footer"><span data-dynamic="today-total">${formatDuration(todayTotal(), true)} today</span><i class="${statusDot}"></i></div>
   </div>`;
 }
 
@@ -996,6 +1481,7 @@ function render(force = false) {
     if (petVideoPlaying) bindPetDropVideo();
     return;
   }
+  const typing = captureTyping();
   appRoot.innerHTML = currentPage === "overview"
     ? overviewPage()
     : currentPage === "history"
@@ -1005,6 +1491,9 @@ function render(force = false) {
         : currentPage === "settings"
           ? settingsPage()
           : aboutPage();
+  restoreTyping(typing);
+  paintFocusRing();
+  ensureFocusRingLoop();
 }
 
 function setNotesStatus(message) {
@@ -1039,14 +1528,14 @@ function syncNotepadField() {
   if (field.value !== next) field.value = next;
 }
 
-// The widget re-renders from scratch, so half-typed text and the caret are carried across.
-function captureWidgetTyping() {
+// Re-renders wipe inputs, so half-typed text and the caret are carried across.
+function captureTyping(selector = ".pet-panel input, .pet-panel textarea, #focus-task, #focus-project, #quick-task, #quick-project") {
   const active = document.activeElement;
-  if (!active?.id || !active.matches?.(".pet-panel input, .pet-panel textarea")) return null;
+  if (!active?.id || !active.matches?.(selector)) return null;
   return { id: active.id, value: active.value, start: active.selectionStart, end: active.selectionEnd };
 }
 
-function restoreWidgetTyping(typing) {
+function restoreTyping(typing) {
   if (!typing) return;
   const input = document.getElementById(typing.id);
   if (!input) return;
@@ -1055,13 +1544,119 @@ function restoreWidgetTyping(typing) {
   input.setSelectionRange?.(typing.start, typing.end);
 }
 
+function captureWidgetTyping() {
+  return captureTyping(".pet-panel input, .pet-panel textarea");
+}
+
+function restoreWidgetTyping(typing) {
+  restoreTyping(typing);
+}
+
+let focusRingRaf = 0;
+
+function liveCountdownMs() {
+  const tracker = appState.tracker;
+  if (!tracker?.endsAt) return null;
+  if (tracker.pausedAt) return Math.max(0, tracker.remainingMs ?? 0);
+  return Math.max(0, tracker.endsAt - Date.now());
+}
+
+function focusRingProgress(remainingMs = liveCountdownMs()) {
+  const tracker = appState.tracker;
+  if (!tracker?.endsAt || remainingMs == null) return 100;
+  const total = Math.max(1, tracker.endsAt - tracker.startedAt);
+  return Math.max(0, Math.min(100, (remainingMs / total) * 100));
+}
+
+function paintFocusRing() {
+  const rings = document.querySelectorAll(".focus-ring");
+  if (!rings.length) return false;
+  const tracker = appState.tracker;
+  const remaining = liveCountdownMs();
+  const progress = focusRingProgress(remaining);
+  const ticking = Boolean(tracker?.endsAt && !tracker.pausedAt && (remaining ?? 0) > 0);
+  const overloaded = trackerIsOverloaded();
+  rings.forEach((el) => {
+    el.style.setProperty("--progress", progress.toFixed(3));
+    el.classList.toggle("is-ticking", ticking);
+    el.classList.toggle("paused", Boolean(tracker?.pausedAt));
+    el.classList.toggle("is-overloaded", overloaded);
+  });
+  document.querySelectorAll(".focus-stage").forEach((el) => el.classList.toggle("is-overloaded", overloaded));
+  document.querySelectorAll(".phase-pill").forEach((el) => el.classList.toggle("is-overloaded", overloaded));
+  return ticking;
+}
+
+function ensureFocusRingLoop() {
+  if (focusRingRaf || isWidget) return;
+  const step = () => {
+    focusRingRaf = 0;
+    if (paintFocusRing()) focusRingRaf = requestAnimationFrame(step);
+  };
+  focusRingRaf = requestAnimationFrame(step);
+}
+
 function updateDynamic() {
   const tracker = appState.tracker;
   const time = tracker ? (tracker.remainingMs ?? tracker.elapsedMs) : (isWidget ? 0 : appState.settings.workMinutes * 60_000);
+  const onBreak = trackerIsBreak();
+  const paused = trackerIsPaused();
+  const overloaded = trackerIsOverloaded();
+  const taskFallback = onBreak
+    ? (tracker.phase === "long-break" ? "Long break" : "Short break")
+    : (isWidget ? "Ready to focus" : "What are you working on?");
   document.querySelectorAll('[data-dynamic="tracker-time"]').forEach((el) => { el.textContent = formatClock(time); });
-  document.querySelectorAll('[data-dynamic="tracker-task"]').forEach((el) => { el.textContent = tracker?.task || (isWidget ? "Ready to focus" : "What are you working on?"); });
+  document.querySelectorAll('[data-dynamic="tracker-task"]').forEach((el) => { el.textContent = tracker?.task || taskFallback; });
   document.querySelectorAll('[data-dynamic="today-total"]').forEach((el) => { el.textContent = `${formatDuration(todayTotal(), true)}${isWidget ? " today" : ""}`; });
   document.querySelectorAll('[data-dynamic="halo-time"]').forEach((el) => { el.textContent = haloTime(); });
+  document.querySelectorAll('[data-dynamic="focus-status"]').forEach((el) => {
+    el.textContent = pomodoroStatusLabel(tracker, onBreak, paused, overloaded);
+  });
+  paintFocusRing();
+  ensureFocusRingLoop();
+}
+
+let timerChimeContext = null;
+
+function playTimerEndSound(completedKind) {
+  if (appState?.settings?.timerEndSound === false) return;
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    if (!timerChimeContext || timerChimeContext.state === "closed") timerChimeContext = new AudioCtx();
+    const ctx = timerChimeContext;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    const isBreakEnd = completedKind === "break";
+    // Focus end: soft descending chime. Break end: brighter ascending chime.
+    const notes = isBreakEnd
+      ? [{ f: 523.25, t: 0 }, { f: 659.25, t: 0.16 }, { f: 783.99, t: 0.32 }]
+      : [{ f: 659.25, t: 0 }, { f: 523.25, t: 0.18 }, { f: 392, t: 0.36 }];
+    const now = ctx.currentTime;
+    for (const note of notes) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = note.f;
+      gain.gain.setValueAtTime(0.0001, now + note.t);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + note.t + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + note.t + 0.42);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + note.t);
+      osc.stop(now + note.t + 0.45);
+    }
+  } catch {
+    // Ignore audio failures — visual cues still cover completion.
+  }
+}
+
+function handleTimerCompleted(payload) {
+  const kind = payload?.completed?.kind;
+  if (!payload?.silent) playTimerEndSound(kind);
+  if (isWidget) return;
+  if (kind === "pomodoro") showToast("Focus round complete — time to rest");
+  else if (kind === "break") showToast("Break over — ready to focus again");
+  else showToast("Timer finished");
 }
 
 function scheduleMotivationQuote(initial = false) {
@@ -1289,13 +1884,8 @@ function closeModal() {
   document.querySelector(".modal-backdrop")?.remove();
   editingSessionId = null;
   pendingDeletionRange = null;
-}
-
-async function start(kind, taskSelector = "#quick-task", projectSelector = "#quick-project") {
-  const task = document.querySelector(taskSelector)?.value?.trim() || "";
-  const project = document.querySelector(projectSelector)?.value?.trim() || "";
-  await api.startTracker({ kind, task, project });
-  showToast(kind === "pomodoro" ? "Focus session started" : "Timer started");
+  pendingDeleteSessionId = null;
+  pendingImportBackup = null;
 }
 
 document.addEventListener("click", async (event) => {
@@ -1306,11 +1896,44 @@ document.addEventListener("click", async (event) => {
     render(true);
     return;
   }
+  const settingsSectionButton = event.target.closest("[data-settings-section]");
+  if (settingsSectionButton) {
+    settingsSection = settingsSectionButton.dataset.settingsSection;
+    lastRenderKey = "";
+    render(true);
+    return;
+  }
   const rangeButton = event.target.closest("[data-range]");
   if (rangeButton) {
     selectedRange = rangeButton.dataset.range;
+    historyPeriodOffset = 0;
+    ledgerPageIndex = 1;
     lastRenderKey = "";
     render(true);
+    return;
+  }
+  const periodButton = event.target.closest("[data-history-period]");
+  if (periodButton) {
+    if (!periodButton.disabled && historyPeriodSupportsOffset()) {
+      const direction = periodButton.dataset.historyPeriod;
+      if (direction === "prev") historyPeriodOffset += 1;
+      if (direction === "next") historyPeriodOffset = Math.max(0, historyPeriodOffset - 1);
+      ledgerPageIndex = 1;
+      lastRenderKey = "";
+      render(true);
+    }
+    return;
+  }
+  const ledgerPageButton = event.target.closest("[data-ledger-page]");
+  if (ledgerPageButton) {
+    if (!ledgerPageButton.disabled) {
+      const nextPage = Number(ledgerPageButton.dataset.ledgerPage);
+      if (Number.isFinite(nextPage) && nextPage >= 1 && nextPage !== ledgerPageIndex) {
+        ledgerPageIndex = nextPage;
+        lastRenderKey = "";
+        render(true);
+      }
+    }
     return;
   }
   const target = event.target.closest("[data-action], [data-start-kind], [data-edit], [data-delete]");
@@ -1325,6 +1948,10 @@ document.addEventListener("click", async (event) => {
     }
     if (target.dataset.action === "start-pomodoro") await start("pomodoro", "#focus-task", "#focus-project");
     if (target.dataset.startKind) await start(target.dataset.startKind);
+    if (target.dataset.action === "extend-2") {
+      await api.extendTracker(2);
+      showToast("Added +2 minutes · overtime");
+    }
     if (target.dataset.action === "stop") {
       await api.stopTracker(true);
       showToast("Session saved to your history");
@@ -1369,22 +1996,108 @@ document.addEventListener("click", async (event) => {
       await api.clearPetDropVideo();
       showToast("Drop animation video removed");
     }
+    if (target.dataset.action === "test-whatsapp") {
+      await collectAndSaveWhatsAppSettings();
+      const result = await api.testWhatsAppIntegration();
+      showToast(result?.hint || "WhatsApp test accepted by Meta");
+    }
+    if (target.dataset.action === "sample-whatsapp") {
+      await collectAndSaveWhatsAppSettings();
+      const result = await api.sendWhatsAppSample("focusEnd");
+      if (result?.ok) showToast(result.hint || "Sample alert sent");
+      else showToast(result?.error || "Sample alert failed", "error");
+    }
+    if (target.dataset.action === "reset-whatsapp-message" && target.dataset.event) {
+      const field = document.querySelector(`[name="wa-message-${target.dataset.event}"]`);
+      if (field) field.value = WHATSAPP_MESSAGE_DEFAULTS[target.dataset.event] || "";
+      showToast("Message reset to default");
+    }
+    if (target.dataset.action === "export-data") {
+      const result = await api.exportData();
+      if (!result?.canceled) showToast(`Backup saved · ${result.sessionCount} session${result.sessionCount === 1 ? "" : "s"}`);
+    }
+    if (target.dataset.action === "import-data") {
+      const preview = await api.chooseImportData();
+      if (!preview?.canceled) openImportModeModal(preview);
+    }
+    if (target.dataset.action === "confirm-import" && pendingImportBackup) {
+      const mode = target.dataset.mode === "merge" ? "merge" : "replace";
+      const backup = pendingImportBackup;
+      const result = await api.applyImportData({ mode, backup });
+      closeModal();
+      settingsSection = "data";
+      if (mode === "merge") {
+        showToast(result.addedSessions
+          ? `Merged ${result.addedSessions} new session${result.addedSessions === 1 ? "" : "s"}`
+          : "No new sessions to merge");
+      } else {
+        showToast(`Import complete · ${result.importedSessions} session${result.importedSessions === 1 ? "" : "s"} restored`);
+      }
+    }
+    if (target.dataset.action === "restore-session" && target.dataset.id) {
+      await api.restoreSession(target.dataset.id);
+      showToast("Session restored to your history");
+    }
+    if (target.dataset.action === "purge-session" && target.dataset.id) {
+      await api.purgeDeletedSession(target.dataset.id);
+      showToast("Entry permanently deleted");
+    }
+    if (target.dataset.action === "purge-all-deleted") {
+      const count = (appState.deletedSessions || []).length;
+      if (!count) return;
+      const result = await api.purgeAllDeletedSessions();
+      showToast(`${result.purgedCount} deleted entr${result.purgedCount === 1 ? "y" : "ies"} cleared`);
+    }
     if (target.dataset.action === "confirm-data-reset" && pendingDeletionRange) {
       const range = pendingDeletionRange;
       const result = await api.deleteSessionsInRange(range);
       closeModal();
-      showToast(`${result.deletedCount} session${result.deletedCount === 1 ? "" : "s"} removed`);
+      settingsSection = "data";
+      showToast(`${result.deletedCount} session${result.deletedCount === 1 ? "" : "s"} moved to Recently deleted`);
+    }
+    if (target.dataset.action === "confirm-session-delete" && pendingDeleteSessionId) {
+      await api.deleteSession(pendingDeleteSessionId);
+      closeModal();
+      showToast("Session moved to Recently deleted");
     }
     if (target.dataset.edit) openManualModal(target.dataset.edit);
-    if (target.dataset.delete) {
-      const session = appState.sessions.find((item) => item.id === target.dataset.delete);
-      if (window.confirm(`Delete “${session?.task || "Focused work"}” from your history?`)) {
-        await api.deleteSession(target.dataset.delete);
-        showToast("Session deleted");
-      }
-    }
+    if (target.dataset.delete) openSessionDeleteModal(target.dataset.delete);
   } catch (error) {
     showToast(error.message || "Something went wrong", "error");
+  }
+});
+
+function commitFocusDraftFromInputs(taskSelector, projectSelector) {
+  const taskEl = document.querySelector(taskSelector);
+  const projectEl = document.querySelector(projectSelector);
+  if (!taskEl && !projectEl) return;
+  const draft = {
+    task: taskEl?.value || "",
+    project: projectEl?.value || ""
+  };
+  if (appState) appState.focusDraft = draft;
+  api.saveFocusDraft(draft).catch(() => {});
+}
+
+async function start(kind, taskSelector = "#quick-task", projectSelector = "#quick-project") {
+  const task = document.querySelector(taskSelector)?.value?.trim() || "";
+  const project = document.querySelector(projectSelector)?.value?.trim() || "";
+  if (kind === "pomodoro") {
+    if (appState) appState.focusDraft = { task, project };
+    await api.saveFocusDraft({ task, project }).catch(() => {});
+  }
+  await api.startTracker({ kind, task, project });
+  showToast(kind === "pomodoro" ? "Focus session started" : "Timer started");
+}
+
+document.addEventListener("focusout", (event) => {
+  const id = event.target?.id;
+  if (id === "focus-task" || id === "focus-project") {
+    commitFocusDraftFromInputs("#focus-task", "#focus-project");
+    return;
+  }
+  if (id === "quick-task" || id === "quick-project") {
+    commitFocusDraftFromInputs("#quick-task", "#quick-project");
   }
 });
 
@@ -1415,6 +2128,7 @@ document.addEventListener("input", (event) => {
   }
   if (event.target.id !== "history-search") return;
   historySearch = event.target.value;
+  ledgerPageIndex = 1;
   clearTimeout(historySearchTimer);
   historySearchTimer = setTimeout(() => {
     lastRenderKey = "";
@@ -1428,8 +2142,19 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", async (event) => {
   if (event.target.id === "history-source") {
     historySource = event.target.value;
+    ledgerPageIndex = 1;
     lastRenderKey = "";
     render(true);
+    return;
+  }
+  if (event.target.id === "history-page-size") {
+    const nextSize = Number(event.target.value);
+    if (HISTORY_PAGE_SIZES.includes(nextSize)) {
+      historyPageSize = nextSize;
+      ledgerPageIndex = 1;
+      lastRenderKey = "";
+      render(true);
+    }
     return;
   }
   if (event.target.id === "data-period" || event.target.id === "data-from" || event.target.id === "data-to") {
@@ -1451,6 +2176,26 @@ document.addEventListener("change", async (event) => {
       showToast(event.target.checked ? "Drop video sound on" : "Drop video sound off");
     } catch (error) {
       showToast(error.message || "Could not update sound setting", "error");
+    }
+    return;
+  }
+  if (event.target.name === "timerEndSound") {
+    try {
+      await api.updateSettings({ timerEndSound: event.target.checked });
+      showToast(event.target.checked ? "Timer end sound on" : "Timer end sound off");
+    } catch (error) {
+      showToast(error.message || "Could not update sound setting", "error");
+    }
+    return;
+  }
+  if (event.target.name === "whatsappEnabled" || event.target.name?.startsWith("wa-enabled-")) {
+    try {
+      await collectAndSaveWhatsAppSettings();
+      if (event.target.name === "whatsappEnabled") {
+        showToast(event.target.checked ? "WhatsApp alerts on" : "WhatsApp alerts off");
+      }
+    } catch (error) {
+      showToast(error.message || "Could not update WhatsApp settings", "error");
     }
   }
 });
@@ -1615,21 +2360,35 @@ document.addEventListener("submit", async (event) => {
     if (event.target.id === "settings-form") {
       const form = event.target;
       const values = Object.fromEntries(new FormData(form));
-      await api.updateSettings({
-        workMinutes: Number(values.workMinutes),
-        shortBreakMinutes: Number(values.shortBreakMinutes),
-        longBreakMinutes: Number(values.longBreakMinutes),
-        roundsBeforeLongBreak: Number(values.roundsBeforeLongBreak),
-        dailyGoalHours: Number(values.dailyGoalHours),
-        autoStartBreaks: form.autoStartBreaks.checked,
-        alwaysOnTop: form.alwaysOnTop.checked,
-        launchWidget: form.launchWidget.checked,
-        widgetDisplay: values.widgetDisplay,
-        petStyle: values.petStyle || appState.settings.petStyle,
-        buddySize: Number(values.buddySize),
-        petDropVideoSize: clampPetDropVideoSize(values.petDropVideoSize),
-        petDropVideoSound: form.petDropVideoSound?.checked || false
-      });
+      const patch = {};
+      const assignNumber = (key) => {
+        if (values[key] === undefined || values[key] === "") return;
+        patch[key] = Number(values[key]);
+      };
+      if (settingsSection === "rhythm") {
+        assignNumber("workMinutes");
+        assignNumber("shortBreakMinutes");
+        assignNumber("longBreakMinutes");
+        assignNumber("roundsBeforeLongBreak");
+        assignNumber("dailyGoalHours");
+        if (form.autoStartBreaks) patch.autoStartBreaks = form.autoStartBreaks.checked;
+        if (form.timerEndSound) patch.timerEndSound = form.timerEndSound.checked;
+      } else if (settingsSection === "companion") {
+        if (values.widgetDisplay) patch.widgetDisplay = values.widgetDisplay;
+        if (values.petStyle) patch.petStyle = values.petStyle;
+        assignNumber("buddySize");
+        if (values.petDropVideoSize !== undefined) patch.petDropVideoSize = clampPetDropVideoSize(values.petDropVideoSize);
+        if (form.petDropVideoSound) patch.petDropVideoSound = form.petDropVideoSound.checked;
+        if (form.alwaysOnTop) patch.alwaysOnTop = form.alwaysOnTop.checked;
+        if (form.launchWidget) patch.launchWidget = form.launchWidget.checked;
+      } else if (settingsSection === "data") {
+        assignNumber("deletedRetentionDays");
+      } else if (settingsSection === "integrations") {
+        await collectAndSaveWhatsAppSettings();
+        showToast("Preferences saved");
+        return;
+      }
+      if (Object.keys(patch).length) await api.updateSettings(patch);
       showToast("Preferences saved");
     }
   } catch (error) {
@@ -1674,6 +2433,12 @@ async function init() {
   });
   api.onAppAction((action) => {
     if (action === "manual-log") openManualModal();
+  });
+  api.onTimerCompleted?.(handleTimerCompleted);
+  api.onWhatsAppNotify?.((result) => {
+    if (isWidget) return;
+    if (result?.ok) showToast(result.hint || "WhatsApp alert sent");
+    else if (result?.error) showToast(result.error, "error");
   });
   if (isWidget) scheduleMotivationQuote(true);
 }
