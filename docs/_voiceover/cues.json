@@ -1,0 +1,17 @@
+{
+  "voice": "en_US-lessac-medium",
+  "lengthScale": 1.05,
+  "volume": 0.9,
+  "cues": [
+    { "at": 2.1, "text": "Focus Hours. A private desktop focus tracker." },
+    { "at": 5.8, "text": "Name a task, then start a Pomodoro." },
+    { "at": 9.6, "text": "Focus Buddy stays on your desktop while you work." },
+    { "at": 13.6, "text": "The work ledger keeps every session on this device." },
+    { "at": 17.8, "text": "Pomodoro rhythms — deep, balanced, or flow." },
+    { "at": 22.0, "text": "Pause from the dashboard, or click the buddy for timer, task, and notes." },
+    { "at": 29.0, "text": "Keep a note in the companion without leaving your work." },
+    { "at": 33.6, "text": "Occasional quotes while you stay with the work." },
+    { "at": 38.2, "text": "Choose a buddy, size, or a compact timer strip." },
+    { "at": 48.4, "text": "Focus Hours. Private, local, always nearby." }
+  ]
+}

@@ -13,3 +13,14 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+ref/
+assets/
+docs/_frames/
+docs/_video-tmp/
+docs/_voiceover/voices/
+docs/_voiceover/_preview/
+docs/_voiceover/*.wav
+docs/*.webm
+docs/_*.mjs
+

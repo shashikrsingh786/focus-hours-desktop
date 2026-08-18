@@ -11,6 +11,109 @@ const HALO_BLOCK = 32;
 const HALO_MIN_WIDTH = 150;
 const NOTEPAD_LIMIT = 4000;
 
+const FONT_FAMILY_OPTIONS = [
+  {
+    id: "focus-hours",
+    name: "Focus Hours",
+    hint: "Lora + DM Sans",
+    body: '"DM Sans", Inter, ui-sans-serif, sans-serif',
+    display: "Lora, Georgia, serif",
+    isDefault: true
+  },
+  {
+    id: "lora",
+    name: "Lora",
+    hint: "Editorial serif",
+    body: "Lora, Georgia, serif",
+    display: "Lora, Georgia, serif"
+  },
+  {
+    id: "dm-sans",
+    name: "DM Sans",
+    hint: "Clean sans",
+    body: '"DM Sans", Inter, ui-sans-serif, sans-serif',
+    display: '"DM Sans", Inter, ui-sans-serif, sans-serif'
+  },
+  {
+    id: "inter",
+    name: "Inter",
+    hint: "UI sans",
+    body: "Inter, ui-sans-serif, sans-serif",
+    display: "Inter, ui-sans-serif, sans-serif"
+  },
+  {
+    id: "outfit",
+    name: "Outfit",
+    hint: "Rounded sans",
+    body: 'Outfit, "Segoe UI", sans-serif',
+    display: 'Outfit, "Segoe UI", sans-serif'
+  },
+  {
+    id: "georgia",
+    name: "Georgia",
+    hint: "Classic serif",
+    body: 'Georgia, "Times New Roman", serif',
+    display: 'Georgia, "Times New Roman", serif'
+  },
+  {
+    id: "system",
+    name: "System",
+    hint: "Your OS font",
+    body: 'ui-sans-serif, "Segoe UI", system-ui, sans-serif',
+    display: 'ui-sans-serif, "Segoe UI", system-ui, sans-serif'
+  }
+];
+
+const FONT_STYLE_OPTIONS = [
+  { id: "regular", name: "Regular", hint: "As designed", fontStyle: "normal", weight: 400, displayWeight: 500, isDefault: true },
+  { id: "italic", name: "Italic", hint: "Slanted", fontStyle: "italic", weight: 400, displayWeight: 500 },
+  { id: "medium", name: "Medium", hint: "A bit heavier", fontStyle: "normal", weight: 500, displayWeight: 500 },
+  { id: "semibold", name: "Semibold", hint: "Stronger", fontStyle: "normal", weight: 600, displayWeight: 600 }
+];
+
+const FONT_SIZE_OPTIONS = [
+  { id: "small", name: "Small", hint: "13px", scale: 0.87 },
+  { id: "default", name: "Default", hint: "15px", scale: 1, isDefault: true },
+  { id: "large", name: "Large", hint: "17px", scale: 1.13 },
+  { id: "xl", name: "Extra large", hint: "20px", scale: 1.28 }
+];
+
+const TYPOGRAPHY_DEFAULTS = {
+  fontFamily: "focus-hours",
+  fontStyle: "regular",
+  fontSize: "default"
+};
+
+const FOCUS_MODES = [
+  {
+    id: "deep",
+    name: "Deep Focus",
+    workMinutes: 50,
+    shortBreakMinutes: 10,
+    longBreakMinutes: 20,
+    roundsBeforeLongBreak: 4,
+    tip: "Long stretches for demanding work. Fewer switches, more depth."
+  },
+  {
+    id: "balanced",
+    name: "Balanced",
+    workMinutes: 25,
+    shortBreakMinutes: 5,
+    longBreakMinutes: 15,
+    roundsBeforeLongBreak: 4,
+    tip: "Classic Pomodoro. Enough time to progress, short enough to stay fresh."
+  },
+  {
+    id: "flow",
+    name: "Flow",
+    workMinutes: 15,
+    shortBreakMinutes: 3,
+    longBreakMinutes: 10,
+    roundsBeforeLongBreak: 6,
+    tip: "Short cycles to get moving. Best when energy is low or tasks are scattered."
+  }
+];
+
 let appState;
 let currentPage = "overview";
 let selectedRange = "week";
@@ -18,8 +121,7 @@ let historyPeriodOffset = 0;
 let historySearch = "";
 let historySource = "all";
 let ledgerPageIndex = 1;
-let historyPageSize = 10;
-const HISTORY_PAGE_SIZES = [10, 20, 50];
+const HISTORY_PAGE_SIZE = 10;
 let historySearchTimer;
 let buddySizeTimer;
 let dropVideoSizeTimer;
@@ -67,6 +169,14 @@ const icons = {
   layers: '<path d="m12 3-9 5 9 5 9-5z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/>',
   spark: '<path d="m12 3 1.3 4.2L17 9l-3.7 1.8L12 15l-1.3-4.2L7 9l3.7-1.8zM5 16l.7 2.3L8 19.5l-2.3 1.2L5 23l-.7-2.3L2 19.5l2.3-1.2z"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L11 4.93"/><path d="M14 11a5 5 0 0 0-7.07 0L4.81 13.12a5 5 0 0 0 7.07 7.07L13 19.07"/>'
+  ,
+  leaf: '<path d="M20.5 3.5C12 4 6.2 7.2 5.4 13.2c-.4 3 1.5 5.6 4.6 5.8 5.8.3 9.8-6 10.5-15.5Z"/><path d="M4 21c2.8-6 7-9.5 12.7-12.5"/>',
+  sun: '<circle cx="12" cy="12" r="3.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  more: '<circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/>',
+  check: '<path d="m5 12 4 4L19 6"/>',
+  type: '<path d="M4 7V4h16v3M9 20h6M12 4v16"/>',
+  trend: '<path d="m4 17 5-5 4 3 7-8"/><path d="M16 7h4v4"/>',
+  reset: '<path d="M4 4v6h6"/><path d="M5.5 15a8 8 0 1 0 .7-7.8L4 10"/>'
 };
 
 const WHATSAPP_EVENT_META = [
@@ -195,7 +305,6 @@ function renderKey(state) {
     historySearch,
     historySource,
     ledgerPageIndex,
-    historyPageSize,
     settingsSection,
     sessions: state.sessions.map(({ id, startedAt, endedAt, task, project, note }) => ({ id, startedAt, endedAt, task, project, note })),
     deletedSessions: (state.deletedSessions || []).map(({ id, deletedAt, task }) => ({ id, deletedAt, task })),
@@ -220,7 +329,7 @@ function showToast(message, tone = "success") {
 }
 
 function navItem(page, label, iconName) {
-  return `<button class="nav-item ${currentPage === page ? "active" : ""}" data-page="${page}">
+  return `<button class="nav-item ${currentPage === page ? "active" : ""}" data-page="${page}" ${currentPage === page ? 'aria-current="page"' : ""}>
     ${icon(iconName)}<span>${label}</span>
   </button>`;
 }
@@ -228,25 +337,28 @@ function navItem(page, label, iconName) {
 function shell(content) {
   return `<div class="shell">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">${icon("clock", 21)}</span><span>Focus Hours</span></div>
+      <div class="brand"><span class="brand-mark">${icon("leaf", 21)}</span><span>Focus Hours</span></div>
       <nav aria-label="Primary">
-        ${navItem("overview", "Overview", "home")}
-        ${navItem("history", "Work ledger", "history")}
+        ${navItem("overview", "Today", "home")}
+        ${navItem("history", "Work Ledger", "history")}
         ${navItem("pomodoro", "Pomodoro", "focus")}
       </nav>
       <div class="sidebar-bottom">
+        <div class="nav-divider"></div>
         ${navItem("settings", "Settings", "settings")}
-        ${navItem("about", "About", "about")}
-        <div class="privacy-note"><span class="status-dot"></span><span>Saved privately<br/>on this device</span></div>
+        ${navItem("about", "About / Help", "about")}
+        <div class="privacy-note"><span class="status-dot"></span><span><strong>Local</strong>Your data stays on<br/>this device.</span><img src="assets/leaf-sprig.png" alt=""/></div>
+        <div class="focus-motto">${icon("sun", 19)}<span>Focus better<br/>Do less, deeply.</span></div>
       </div>
     </aside>
     <main class="main-content">
-      <header class="topbar">
+      <header class="topbar topbar-${currentPage} ${currentPage === "pomodoro" || currentPage === "about" ? "topbar-quiet" : ""}">
         <div>
-          <p class="eyebrow">${formatDay(Date.now(), true)}</p>
+          ${currentPage === "overview" || currentPage === "settings" ? `<p class="eyebrow">${currentPage === "overview" ? "Good morning" : "SETTINGS"}</p>` : ""}
           <h1>${pageTitle()}</h1>
+          ${currentPage === "history" ? '<p class="page-subtitle">A calm review of where your time went.</p>' : currentPage === "settings" ? '<p class="page-subtitle">Shape your focus rhythm and goals.</p>' : ""}
         </div>
-        <button class="button primary" data-action="manual">${icon("plus", 18)} Log work time</button>
+        ${currentPage === "overview" || currentPage === "pomodoro" ? `<div class="focus-window">${icon("sun", 19)}<span>Best focus window</span><strong>9:00 – 11:00 AM</strong></div><button class="more-button" data-action="manual" title="Log work time">${icon("more", 20)}</button>` : currentPage === "history" ? worklogPeriodNavigator() : ""}
       </header>
       ${content}
     </main>
@@ -255,8 +367,8 @@ function shell(content) {
 
 function pageTitle() {
   return {
-    overview: "Today",
-    history: "Work ledger",
+    overview: "What should I focus on now?",
+    history: "Work Ledger",
     pomodoro: "Pomodoro",
     settings: "Preferences",
     about: "About Focus Hours"
@@ -289,97 +401,52 @@ function stickyFocusProject() {
   return appState.tracker?.project || appState.focusDraft?.project || "";
 }
 
-function trackerPanel(compact = false) {
-  const tracker = appState.tracker;
-  const displayMs = tracker
-    ? (tracker.remainingMs ?? tracker.elapsedMs)
-    : appState.settings.workMinutes * 60_000;
-  const paused = trackerIsPaused();
-  const onBreak = trackerIsBreak();
-  const phaseLabel = paused
-    ? "Paused"
-    : onBreak
-      ? (tracker.phase === "long-break" ? "Long break" : "Short break")
-      : tracker?.kind === "pomodoro" ? "Focus session" : tracker ? "Tracking now" : "Ready when you are";
-  return `<section class="tracker-card ${tracker ? "running" : ""} ${paused ? "paused" : ""} ${onBreak ? "on-break" : ""} ${compact ? "compact" : ""}">
-    <div class="tracker-copy">
-      <span class="live-label">${tracker ? '<i></i>' : ""}${phaseLabel}</span>
-      <h2 data-dynamic="tracker-time">${formatClock(displayMs)}</h2>
-      <p data-dynamic="tracker-task">${escapeHtml(tracker?.task || (compact ? "Start a timer to stay intentional." : "What are you working on?"))}</p>
-    </div>
-    <div class="tracker-actions">
-      ${tracker
-        ? `<button class="timer-button" data-action="${paused ? "resume" : "pause"}" title="${paused ? "Resume this session" : "Pause and keep the time logged"}">${icon(paused ? "play" : "pause", 22)}</button>
-           <button class="timer-button stop" data-action="stop" title="Stop and save this session">${icon("stop", 20)}</button>`
-        : `<button class="timer-button" data-action="start" title="Start live timer">${icon("play", 23)}</button>`}
-    </div>
-  </section>`;
-}
-
 function overviewPage() {
   const dayStart = startOfDay();
   const weekStart = startOfWeek(dayStart);
   const today = todayTotal();
   const week = totalBetween(weekStart, Date.now() + 1);
   const sessionsToday = appState.sessions.filter((s) => s.startedAt >= dayStart).length;
-  const focusSessions = appState.sessions.filter((s) => s.source === "pomodoro" && s.startedAt >= dayStart).length;
   const recent = appState.sessions.slice(0, 4);
 
-  return shell(`<div class="page-grid">
-    <div class="primary-column">
-      <section class="hero-card">
-        <div class="hero-heading">
-          <div><span class="section-kicker">NOW</span><h2>Current session</h2></div>
-          <button class="icon-button info" title="Live timers keep counting even if this window is hidden.">${icon("info", 18)}</button>
-        </div>
-        <div class="tracking-fields">
-          <label class="task-input-wrap"><span class="sr-only">Current task</span><input id="quick-task" placeholder="Name the outcome you want to move forward…" maxlength="120" value="${escapeHtml(stickyFocusTask())}" ${appState.tracker ? "disabled" : ""}/></label>
-          <label class="task-input-wrap project-input"><span class="sr-only">Project or area</span><input id="quick-project" placeholder="Project / area" maxlength="80" value="${escapeHtml(stickyFocusProject())}" ${appState.tracker ? "disabled" : ""}/></label>
-        </div>
-        <div class="mode-row">
-          <button class="mode-button ${appState.tracker?.kind !== "pomodoro" ? "selected" : ""}" data-start-kind="timer">${icon("clock", 18)} Open timer</button>
-          <button class="mode-button ${appState.tracker?.kind === "pomodoro" ? "selected" : ""}" data-start-kind="pomodoro">${icon("focus", 18)} Pomodoro · ${appState.settings.workMinutes} min</button>
-        </div>
-        ${trackerPanel()}
+  const tracker = appState.tracker;
+  const displayMs = tracker ? (tracker.remainingMs ?? tracker.elapsedMs) : appState.settings.workMinutes * 60_000;
+  const goalHours = appState.settings.dailyGoalHours || 8;
+  const goalMs = goalHours * 3_600_000;
+  return shell(`<div class="today-layout">
+    <section class="calm-session-card">
+      <div class="session-copy">
+        <span class="leaf-kicker">${icon("leaf", 15)} CURRENT SESSION</span>
+        <input id="quick-task" class="calm-task-input" aria-label="Current task" placeholder="What deserves your attention?" maxlength="120" value="${escapeHtml(stickyFocusTask())}" ${tracker ? "disabled" : ""}/>
+        <label class="calm-project">${icon("briefcase", 17)}<input id="quick-project" aria-label="Project or area" placeholder="Product · Design" maxlength="80" value="${escapeHtml(stickyFocusProject())}" ${tracker ? "disabled" : ""}/></label>
+        <span class="method-pill">${icon("focus", 16)} Pomodoro · ${appState.settings.workMinutes} min</span>
+      </div>
+      <div class="session-timer">
+        <div class="timer-rays" aria-hidden="true"></div>
+        <strong data-dynamic="tracker-time">${formatClock(displayMs)}</strong>
+        <span>${tracker ? pomodoroStatusLabel(tracker, trackerIsBreak(), trackerIsPaused(), trackerIsOverloaded()) : "Your focus time"}</span>
+      </div>
+      <div class="session-primary-action">
+        ${tracker
+          ? `<button class="button primary large" data-action="${trackerIsPaused() ? "resume" : "pause"}">${icon(trackerIsPaused() ? "play" : "pause", 19)} ${trackerIsPaused() ? "Resume focus" : "Pause focus"}</button>`
+          : `<button class="button primary large" data-start-kind="pomodoro">${icon("play", 19)} Start focus</button>`}
+        ${tracker ? `<button class="text-button end-session" data-action="stop">End session</button>` : ""}
+      </div>
+    </section>
+    <label class="quick-capture">${icon("leaf", 17)}<input id="quick-capture-input" placeholder="Capture a distraction or note it for later…" maxlength="120"/><button type="button" data-action="quick-capture">Capture</button></label>
+    <div class="today-lower-grid">
+      <section class="continue-card">
+        <div class="section-heading"><div><span class="continue-title">${icon("history", 18)} Continue where you left off</span></div></div>
+        ${sessionList(recent.slice(0, 3), true)}
+        <button class="text-button" data-page="history">View all sessions ${icon("chevron", 15)}</button>
       </section>
-      <section class="section-block">
-        <div class="section-heading"><div><span class="section-kicker">RECENT</span><h2>Latest work</h2></div><button class="text-button" data-page="history">View all ${icon("chevron", 16)}</button></div>
-        ${sessionList(recent, true)}
+      <section class="today-summary-card">
+        <div><span class="section-kicker">TODAY'S FOCUS</span><strong data-dynamic="today-total">${formatDuration(today, true)}</strong><p>of ${goalHours}h daily target</p><button class="text-button" data-page="settings">${icon("edit", 14)} Edit goal</button></div>
+        <div class="summary-ring" style="--progress:${Math.min(100, today / Math.max(1, goalMs) * 100)}"><strong>${Math.round(Math.min(100, today / Math.max(1, goalMs) * 100))}%</strong></div>
+        <footer>${icon("leaf", 14)} ${sessionsToday} session${sessionsToday === 1 ? "" : "s"}<i></i><span>This week ${formatDuration(week, true)}</span></footer>
       </section>
     </div>
-    <aside class="insights-column">
-      <section class="today-card">
-        <div class="ring" style="--progress:${Math.min(100, today / (8 * 36_000))}">
-          <div><strong data-dynamic="today-total">${formatDuration(today, true)}</strong><span>today</span></div>
-        </div>
-        <h3>Your focused time</h3>
-        <p>${today >= 8 * 3_600_000 ? "Daily goal complete. Nicely done." : `${formatDuration(Math.max(0, 8 * 3_600_000 - today))} to an 8-hour day`}</p>
-      </section>
-      <div class="mini-stats">
-        <div><span>This week</span><strong>${formatDuration(week, true)}</strong></div>
-        <div><span>Sessions today</span><strong>${sessionsToday}</strong></div>
-        <div><span>Focus rounds</span><strong>${focusSessions}</strong></div>
-      </div>
-      ${weekChart()}
-    </aside>
   </div>`);
-}
-
-function weekChart() {
-  const today = startOfDay();
-  const values = Array.from({ length: 7 }, (_, index) => {
-    const start = today - (6 - index) * 86_400_000;
-    return {
-      start,
-      value: totalBetween(start, start + 86_400_000),
-      label: new Intl.DateTimeFormat(undefined, { weekday: "narrow" }).format(start)
-    };
-  });
-  const max = Math.max(8 * 3_600_000, ...values.map((item) => item.value));
-  return `<section class="week-card">
-    <div class="card-title"><div><span>Last 7 days</span><strong>${formatDuration(values.reduce((a, b) => a + b.value, 0), true)}</strong></div>${icon("calendar", 18)}</div>
-    <div class="bar-chart">${values.map((item) => `<div class="bar-column" title="${formatDuration(item.value)} on ${formatDay(item.start)}"><div class="bar-track"><i style="height:${Math.max(item.value ? 8 : 2, item.value / max * 100)}%"></i></div><span>${item.label}</span></div>`).join("")}</div>
-  </section>`;
 }
 
 function sessionList(sessions, minimal = false) {
@@ -413,17 +480,17 @@ function formatPeriodSpan(from, to) {
 }
 
 function worklogPeriodNavigator() {
-  if (!historyPeriodSupportsOffset()) return "";
   const { from, to } = historyPeriodBounds();
   const label = selectedRange === "month"
     ? new Intl.DateTimeFormat(undefined, { month: "short", year: "numeric" }).format(from)
     : selectedRange === "today"
       ? (historyPeriodOffset === 0 ? "Today" : historyPeriodOffset === 1 ? "Yesterday" : formatDay(from))
-      : formatPeriodSpan(from, to);
+      : selectedRange === "all" ? "All recorded work" : formatPeriodSpan(from, to);
+  const supportsOffset = historyPeriodSupportsOffset();
   return `<div class="period-nav" role="group" aria-label="Browse ${selectedRange} periods">
-    <button type="button" class="period-nav-button" data-history-period="prev" aria-label="Previous ${selectedRange}"><span class="flip">${icon("chevron", 15)}</span></button>
-    <span class="period-nav-label" title="${escapeHtml(worklogRangeLabel())}">${escapeHtml(label)}</span>
-    <button type="button" class="period-nav-button" data-history-period="next" ${historyPeriodOffset <= 0 ? "disabled" : ""} aria-label="Next ${selectedRange}">${icon("chevron", 15)}</button>
+    ${supportsOffset ? `<button type="button" class="period-nav-button" data-history-period="prev" aria-label="Previous ${selectedRange}"><span class="flip">${icon("chevron", 15)}</span></button>` : ""}
+    <span class="period-nav-label" title="${escapeHtml(worklogRangeLabel())}">${icon("calendar", 15)}<strong>${escapeHtml(label)}</strong></span>
+    ${supportsOffset ? `<button type="button" class="period-nav-button" data-history-period="next" ${historyPeriodOffset <= 0 ? "disabled" : ""} aria-label="Next ${selectedRange}">${icon("chevron", 15)}</button>` : ""}
   </div>`;
 }
 
@@ -438,49 +505,51 @@ function historyPage() {
       && (historySource === "all" || session.source === historySource)
       && (!query || haystack.includes(query));
   });
-  const totalPages = Math.max(1, Math.ceil(sessions.length / historyPageSize));
+  const totalPages = Math.max(1, Math.ceil(sessions.length / HISTORY_PAGE_SIZE));
   ledgerPageIndex = Math.min(Math.max(1, ledgerPageIndex), totalPages);
-  const pageStart = (ledgerPageIndex - 1) * historyPageSize;
-  const pageSessions = sessions.slice(pageStart, pageStart + historyPageSize);
+  const pageStart = (ledgerPageIndex - 1) * HISTORY_PAGE_SIZE;
+  const pageSessions = sessions.slice(pageStart, pageStart + HISTORY_PAGE_SIZE);
   const total = sessions.reduce((sum, session) => sum + session.durationMs, 0);
   const activeDays = new Set(sessions.map((session) => startOfDay(session.startedAt))).size;
   const longest = sessions.reduce((best, session) => Math.max(best, session.durationMs), 0);
   const average = activeDays ? total / activeDays : 0;
   const goalMs = (appState.settings.dailyGoalHours || 8) * 3_600_000;
+  const goalCoverage = Math.round(Math.min(999, total / Math.max(1, activeDays || 1) / goalMs * 100));
   const showingFrom = sessions.length ? pageStart + 1 : 0;
   const showingTo = Math.min(sessions.length, pageStart + pageSessions.length);
 
-  return shell(`<section class="worklog-commandbar">
-      <div class="worklog-range-row">
-        <div class="range-tabs worklog-ranges" role="tablist" aria-label="Work log range">
-          ${["today", "week", "month", "all"].map((range) => `<button class="${selectedRange === range ? "active" : ""}" data-range="${range}">${range === "all" ? "All time" : range[0].toUpperCase() + range.slice(1)}</button>`).join("")}
-        </div>
-        ${worklogPeriodNavigator()}
+  const filtersActive = Boolean(historySearch.trim() || historySource !== "all" || selectedRange !== "week" || historyPeriodOffset);
+  return shell(`<section class="ledger-toolbar" aria-label="Filter work ledger">
+      <div class="ledger-search-row">
+        <label class="search-field">${icon("search", 17)}<input id="history-search" value="${escapeHtml(historySearch)}" placeholder="Search tasks, projects, or notes…" aria-label="Search work ledger"/><kbd>Ctrl K</kbd></label>
+        <button class="button secondary ledger-add-button" data-action="manual">${icon("plus", 16)} Log work</button>
       </div>
-      <div class="worklog-tools">
-        <label class="search-field">${icon("search", 17)}<input id="history-search" value="${escapeHtml(historySearch)}" placeholder="Search task, project or note" aria-label="Search work log"/></label>
-        <select id="history-source" aria-label="Filter by tracking method">
-          <option value="all" ${historySource === "all" ? "selected" : ""}>All methods</option>
-          <option value="manual" ${historySource === "manual" ? "selected" : ""}>Manual</option>
-          <option value="timer" ${historySource === "timer" ? "selected" : ""}>Live timer</option>
-          <option value="pomodoro" ${historySource === "pomodoro" ? "selected" : ""}>Pomodoro</option>
-        </select>
+      <div class="ledger-filter-row">
+        <div class="filter-cluster" aria-label="Time period"><span>Period</span><div class="filter-pills">
+          ${[["today", "Today"], ["week", "Week"], ["month", "Month"], ["all", "All time"]].map(([range, label]) => `<button type="button" class="${selectedRange === range ? "active" : ""}" data-range="${range}" aria-pressed="${selectedRange === range}">${label}</button>`).join("")}
+        </div></div>
+        <div class="filter-cluster" aria-label="Tracking method"><span>Method</span><div class="filter-pills">
+          ${[["all", "All"], ["manual", "Manual"], ["timer", "Timer"], ["pomodoro", "Pomodoro"]].map(([source, label]) => `<button type="button" class="${historySource === source ? "active" : ""}" data-source-filter="${source}" aria-pressed="${historySource === source}">${label}</button>`).join("")}
+        </div></div>
+        <span class="filter-result-count">${sessions.length} result${sessions.length === 1 ? "" : "s"}</span>
+        ${filtersActive ? `<button type="button" class="clear-filters" data-action="clear-ledger-filters">${icon("reset", 14)} Reset</button>` : ""}
       </div>
     </section>
     <section class="worklog-metrics">
-      ${metricCard("Logged time", formatDuration(total, true), `${sessions.length} session${sessions.length === 1 ? "" : "s"}`, "clock")}
+      ${metricCard("Logged time", formatDuration(total, true), `${sessions.length} session${sessions.length === 1 ? "" : "s"}`, "clock", "featured")}
       ${metricCard("Daily average", formatDuration(average, true), `${activeDays} active day${activeDays === 1 ? "" : "s"}`, "calendar")}
-      ${metricCard("Longest block", formatDuration(longest, true), longest ? "Your deepest session" : "No session yet", "focus")}
-      ${metricCard("Goal coverage", `${Math.round(Math.min(999, total / Math.max(1, activeDays || 1) / goalMs * 100))}%`, `${appState.settings.dailyGoalHours || 8}h daily target`, "spark")}
+      ${metricCard("Longest block", formatDuration(longest, true), longest ? "Your deepest session" : "No session yet", "focus", "deep")}
+      ${metricCard("Goal coverage", `${goalCoverage}%`, `${appState.settings.dailyGoalHours || 8}h daily target`, "spark", "goal", goalCoverage)}
     </section>
     <div class="worklog-layout">
       <section class="ledger-card">
         <div class="ledger-heading">
-          <div><span class="section-kicker">WORK LEDGER</span><h2>${worklogRangeLabel()}</h2></div>
+          <div><span class="leaf-kicker">${icon("leaf", 14)} WORK LEDGER</span><h2>${worklogRangeLabel()}</h2><p>${sessions.length ? `${sessions.length} focused block${sessions.length === 1 ? "" : "s"} · ${formatDuration(total, true)} logged` : "A quiet record of completed work"}</p></div>
           <span class="ledger-count">${sessions.length ? `${showingFrom}–${showingTo} of ${sessions.length}` : "0 entries"}</span>
+          <img class="ledger-heading-leaf" src="assets/leaf-branch.png" alt=""/>
         </div>
         ${workLedger(pageSessions)}
-        ${sessions.length ? ledgerPagination(totalPages) : ""}
+        ${totalPages > 1 ? ledgerPagination(totalPages) : ""}
       </section>
       <aside class="worklog-insights">
         ${activityPulse(from, to)}
@@ -493,10 +562,11 @@ function historyPage() {
     </div>`);
 }
 
-function metricCard(label, value, meta, iconName) {
-  return `<article class="metric-card">
+function metricCard(label, value, meta, iconName, tone = "", progress = null) {
+  return `<article class="metric-card ${tone ? `metric-${tone}` : ""}">
     <span class="metric-icon">${icon(iconName, 18)}</span>
-    <div><span>${label}</span><strong>${value}</strong><small>${meta}</small></div>
+    <div><span>${label}</span><strong>${value}</strong></div><small>${meta}</small>
+    ${progress == null ? "" : `<span class="metric-progress" aria-hidden="true"><i style="width:${Math.min(100, Math.max(0, progress))}%"></i></span>`}
   </article>`;
 }
 
@@ -546,12 +616,6 @@ function ledgerPagination(totalPages) {
   }
 
   return `<div class="ledger-pagination">
-    <label class="ledger-page-size">
-      <span>Per page</span>
-      <select id="history-page-size" aria-label="Entries per page">
-        ${HISTORY_PAGE_SIZES.map((size) => `<option value="${size}" ${historyPageSize === size ? "selected" : ""}>${size}</option>`).join("")}
-      </select>
-    </label>
     <div class="ledger-page-controls" role="navigation" aria-label="Ledger pages">
       <button type="button" class="ledger-page-nav" data-ledger-page="${ledgerPageIndex - 1}" ${ledgerPageIndex <= 1 ? "disabled" : ""} aria-label="Previous page"><span class="flip">${icon("chevron", 15)}</span> Prev</button>
       ${pageControls}
@@ -563,8 +627,8 @@ function ledgerPagination(totalPages) {
 
 function workLedger(sessions) {
   if (!sessions.length) {
-    const filtered = historySearch || historySource !== "all";
-    return `<div class="ledger-empty">${icon(filtered ? "search" : "clock", 28)}<h3>${filtered ? "Nothing matches those filters" : "Your ledger is ready"}</h3><p>${filtered ? "Try a broader search or another method." : "Log a real block of work and it will appear here with its context."}</p>${filtered ? "" : '<button class="button secondary" data-action="manual">Add first entry</button>'}</div>`;
+    const filtered = Boolean(historySearch || historySource !== "all" || appState.sessions.length);
+    return `<div class="ledger-empty"><img src="assets/mountain.png" alt=""/>${icon(filtered ? "search" : "clock", 25)}<h3>${filtered ? "No work in this view" : "Your ledger is ready"}</h3><p>${filtered ? "Try a different period, method, or a broader search." : "Log a real block of work and it will appear here with its context."}</p>${filtered ? '<button class="button secondary" data-action="clear-ledger-filters">Reset filters</button>' : '<button class="button secondary" data-action="manual">Add first entry</button>'}</div>`;
   }
 
   const groups = new Map();
@@ -577,18 +641,15 @@ function workLedger(sessions) {
   return `<div class="ledger-days">${[...groups.entries()].map(([day, daySessions]) => {
     const dayTotal = daySessions.reduce((sum, session) => sum + session.durationMs, 0);
     return `<section class="ledger-day">
-      <header><div><strong>${dayHeading(day)}</strong><span>${formatDay(day)}</span></div><em>${formatDuration(dayTotal, true)}</em></header>
+      <header><div><strong>${dayHeading(day)}</strong><span>${daySessions.length} session${daySessions.length === 1 ? "" : "s"}</span></div><em>${formatDuration(dayTotal, true)}</em></header>
       <div class="ledger-entries">${daySessions.map((session) => `
         <article class="ledger-entry">
           <div class="entry-time"><strong>${formatTime(session.startedAt)}</strong><span>${formatTime(session.endedAt)}</span></div>
           <div class="entry-rail"><i class="${session.source}"></i></div>
           <div class="entry-body">
-            <div class="entry-meta">
-              ${session.project ? `<span class="project-chip">${icon("briefcase", 12)} ${escapeHtml(session.project)}</span>` : '<span class="project-chip muted">Unsorted</span>'}
-              <span class="source-chip ${session.source}">${sourceLabel(session.source)}</span>
-            </div>
-            <h3>${escapeHtml(session.task || "Focused work")}</h3>
-            ${session.note ? `<p>${escapeHtml(session.note)}</p>` : ""}
+            <div class="entry-title-line"><h3>${escapeHtml(session.task || "Focused work")}</h3><span class="project-chip ${session.project ? "" : "muted"}">${session.project ? `${icon("briefcase", 12)} ${escapeHtml(session.project)}` : "Unsorted"}</span></div>
+            <span class="source-label ${session.source}">${sourceLabel(session.source)}</span>
+            ${session.note ? `<p class="entry-note" title="${escapeHtml(session.note)}">${icon("note", 13)}<span>${escapeHtml(session.note)}</span></p>` : ""}
           </div>
           <div class="entry-duration"><strong>${formatDuration(session.durationMs, true)}</strong><span>${Math.max(1, Math.round(session.durationMs / 60_000))} min</span></div>
           <div class="entry-actions">
@@ -659,6 +720,42 @@ function extendChipButton() {
   </button>`;
 }
 
+function activeFocusMode(settings = appState.settings) {
+  return FOCUS_MODES.find((mode) =>
+    Number(settings.workMinutes) === mode.workMinutes
+    && Number(settings.shortBreakMinutes) === mode.shortBreakMinutes
+    && Number(settings.longBreakMinutes) === mode.longBreakMinutes
+    && Number(settings.roundsBeforeLongBreak) === mode.roundsBeforeLongBreak
+  )?.id || "custom";
+}
+
+function focusModePicker() {
+  const active = activeFocusMode();
+  const sessionLive = Boolean(appState.tracker);
+  return `<div class="focus-mode-picker">
+    <div role="tablist" aria-label="Focus rhythm">
+      ${FOCUS_MODES.map((mode) => {
+        const selected = active === mode.id;
+        return `<div class="focus-mode-cell ${selected ? "active" : ""}">
+          <button type="button" role="tab" aria-selected="${selected}" class="focus-mode-option" data-action="set-focus-mode" data-mode="${mode.id}" ${sessionLive ? "disabled" : ""}>
+            ${selected ? icon("clock", 15) : ""}
+            ${mode.name}
+          </button>
+          <button type="button" class="mode-info" aria-label="${mode.name} explained">
+            ${icon("info", 11)}
+            <span class="mode-tooltip" role="tooltip">
+              <strong>${mode.name}</strong>
+              ${mode.tip}
+              <em>${mode.workMinutes} min focus · ${mode.shortBreakMinutes} min break · ${mode.roundsBeforeLongBreak} rounds</em>
+            </span>
+          </button>
+        </div>`;
+      }).join("")}
+    </div>
+    <p>${appState.settings.workMinutes} min focus <i></i> ${appState.settings.shortBreakMinutes} min break <i></i> ${appState.settings.roundsBeforeLongBreak} rounds${active === "custom" ? " <i></i> Custom" : ""}</p>
+  </div>`;
+}
+
 function pomodoroPage() {
   const tracker = appState.tracker;
   const onBreak = trackerIsBreak();
@@ -670,42 +767,29 @@ function pomodoroPage() {
   const duration = tracker ? (tracker.remainingMs ?? tracker.elapsedMs) : appState.settings.workMinutes * 60_000;
   const total = tracker?.endsAt ? tracker.endsAt - tracker.startedAt : appState.settings.workMinutes * 60_000;
   const progress = tracker?.endsAt ? Math.max(0, Math.min(100, (tracker.remainingMs / total) * 100)) : 100;
-  const round = currentPomodoroRound();
-  const cycle = appState.settings.roundsBeforeLongBreak;
-  return shell(`<div class="pomodoro-layout">
+  return shell(`<div class="pomodoro-calm">
     <section class="focus-stage ${onBreak ? "is-break" : tracker ? "is-focus" : ""} ${overloaded ? "is-overloaded" : ""}">
-      <div class="phase-pill ${onBreak ? "is-break" : ""} ${overloaded ? "is-overloaded" : ""}">${phaseName} · ROUND ${round} OF ${cycle}${overloaded ? " · +TIME" : ""}</div>
+      <span class="phase-pill ${onBreak ? "is-break" : ""}">${icon("leaf", 14)} ${onBreak ? phaseName : "FOCUS SESSION"}</span>
+      <div class="focus-session-fields">
+        <input class="focus-task-input" id="focus-task" aria-label="Focus task" placeholder="What deserves your full attention?" value="${escapeHtml(stickyFocusTask())}" ${tracker ? "disabled" : ""}/>
+        <label>${icon("briefcase", 16)}<input class="focus-project-input" id="focus-project" aria-label="Project or area" placeholder="Product · Design" value="${escapeHtml(stickyFocusProject())}" ${tracker ? "disabled" : ""}/></label>
+      </div>
       <div class="focus-ring ${paused ? "paused" : ""} ${onBreak ? "is-break" : ""} ${overloaded ? "is-overloaded" : ""} ${tracker && !paused ? "is-ticking" : ""}" style="--progress:${progress}">
         <i class="focus-ring-cap" aria-hidden="true"></i>
         <div><strong data-dynamic="tracker-time">${formatClock(duration)}</strong><span data-dynamic="focus-status">${pomodoroStatusLabel(tracker, onBreak, paused, overloaded)}</span></div>
       </div>
-      <div class="focus-inputs">
-        <input class="focus-task-input" id="focus-task" placeholder="What deserves your full attention?" value="${escapeHtml(stickyFocusTask())}" ${tracker ? "disabled" : ""}/>
-        <input class="focus-task-input focus-project-input" id="focus-project" placeholder="Project / area" value="${escapeHtml(stickyFocusProject())}" ${tracker ? "disabled" : ""}/>
-      </div>
       ${tracker
-        ? `<div class="focus-actions">
-             <button class="button secondary" data-action="${trackerIsPaused() ? "resume" : "pause"}">${icon(trackerIsPaused() ? "play" : "pause", 18)} ${trackerIsPaused() ? "Resume" : "Pause"}</button>
-             ${extendChipButton()}
-             <button class="button primary large" data-action="stop">${icon("stop", 20)} End ${tracker.kind === "break" ? "break" : "focus session"}</button>
-           </div>`
-        : `<button class="button primary large" data-action="start-pomodoro">${icon("play", 20)} Start focus session</button>`}
-      <p class="quiet-note">Your focus note sticks until you change it — saved when you leave the field or start. Completed rounds go to work history automatically.</p>
+        ? `<div class="focus-actions"><button class="button secondary" data-action="${paused ? "resume" : "pause"}">${icon(paused ? "play" : "pause", 18)} ${paused ? "Resume" : "Pause"}</button>${extendChipButton()}<button class="button primary large" data-action="stop">${icon("stop", 19)} End ${onBreak ? "break" : "focus"}</button></div>`
+        : `<button class="button primary large" data-action="start-pomodoro">${icon("play", 19)} Start focus</button>`}
     </section>
-    <aside class="pomodoro-aside">
-      <div class="aside-card">
-        <span class="section-kicker">YOUR RHYTHM</span>
-        <h3>${appState.settings.workMinutes} min focus</h3>
-        <div class="rhythm-flow">
-          <span class="focus">${appState.settings.workMinutes}</span><i></i>
-          <span>${appState.settings.shortBreakMinutes}</span><i></i>
-          <span class="focus">${appState.settings.workMinutes}</span><i></i>
-          <span>${appState.settings.shortBreakMinutes}</span>
-        </div>
-        <button class="text-button" data-page="settings">Adjust timing ${icon("chevron", 16)}</button>
-      </div>
-      <div class="tip-card"><span>Small reminder</span><p>One task, one timer. Put distractions somewhere you can return to later.</p></div>
-    </aside>
+    <div class="pomodoro-bottom">
+      ${focusModePicker()}
+      <section class="parking-note" aria-labelledby="parking-note-title">
+        <div class="parking-note-heading"><span>${icon("leaf", 16)}<strong id="parking-note-title">Parking note</strong></span><em data-dynamic="notes-status">Saved locally</em></div>
+        <textarea id="focus-parking" rows="1" maxlength="4000" aria-label="Parking note" placeholder="Capture a thought without leaving your focus…">${escapeHtml(appState.notepad || "")}</textarea>
+        <div class="parking-note-footer"><span>It will still be here when you finish.</span><img src="assets/leaf-branch.png" alt=""/></div>
+      </section>
+    </div>
   </div>`);
 }
 
@@ -718,20 +802,76 @@ function settingsNavItem(id, label, iconName, hint) {
 
 function settingsRhythmCard() {
   const s = appState.settings;
-  return `<section class="settings-card">
-    <div class="settings-heading"><span class="settings-icon">${icon("focus", 20)}</span><div><h2>Focus rhythm</h2><p>Choose a pace that helps you stay fresh.</p></div></div>
-    <div class="field-grid">
-      ${numberField("workMinutes", "Focus", s.workMinutes, "minutes")}
-      ${numberField("shortBreakMinutes", "Short break", s.shortBreakMinutes, "minutes")}
-      ${numberField("longBreakMinutes", "Long break", s.longBreakMinutes, "minutes")}
-      ${numberField("roundsBeforeLongBreak", "Long break after", s.roundsBeforeLongBreak, "rounds")}
+  return `<div class="rhythm-settings-layout">
+    <div class="rhythm-settings-main">
+      <section class="settings-card rhythm-card">
+        <div class="settings-heading settings-heading-split"><div><span class="leaf-kicker">${icon("leaf", 15)} FOCUS RHYTHM</span><p>Customize your ideal flow.</p></div><button type="button" class="button secondary" data-action="restore-rhythm">${icon("reset", 15)} Restore defaults</button></div>
+        <div class="field-grid">
+          ${numberField("workMinutes", "Focus", s.workMinutes, "min")}
+          ${numberField("shortBreakMinutes", "Short break", s.shortBreakMinutes, "min")}
+          ${numberField("longBreakMinutes", "Long break", s.longBreakMinutes, "min")}
+          ${numberField("roundsBeforeLongBreak", "Long break after", s.roundsBeforeLongBreak, "rounds")}
+        </div>
+        ${toggleField("autoStartBreaks", "Start breaks automatically", "Move into recovery as soon as a focus round ends.", s.autoStartBreaks)}
+        ${toggleField("timerEndSound", "Play sound when a timer ends", "Hear a short chime when a focus round or break finishes.", s.timerEndSound !== false)}
+      </section>
+      <section class="settings-card goal-card">
+        <div class="settings-heading"><span class="settings-icon">${icon("focus", 20)}</span><div><span class="leaf-kicker">WORK LOG TARGET</span><p>Set a daily goal to keep you grounded.</p></div></div>
+        <div class="field-grid compact-fields">${numberField("dailyGoalHours", "Daily focused-work goal", s.dailyGoalHours || 8, "hours")}</div>
+      </section>
     </div>
-    ${toggleField("autoStartBreaks", "Start breaks automatically", "Move into recovery as soon as a focus round ends.", s.autoStartBreaks)}
-    ${toggleField("timerEndSound", "Play sound when a timer ends", "Hear a short chime when a focus round or break finishes.", s.timerEndSound !== false)}
-    <div class="settings-divider"></div>
-    <div class="settings-heading compact"><span class="settings-icon">${icon("history", 20)}</span><div><h2>Work log target</h2><p>Give your history a realistic daily context.</p></div></div>
-    <div class="field-grid compact-fields">
-      ${numberField("dailyGoalHours", "Daily focused-work goal", s.dailyGoalHours || 8, "hours")}
+    <aside class="rhythm-preview">
+      <span class="section-kicker">RHYTHM PREVIEW</span><p>Your flow at a glance.</p>
+      <div class="preview-ring"><div><strong>${s.workMinutes}</strong><span>min</span><em>Focus</em></div></div>
+      <ul><li><i></i><span>Focus</span><strong>${s.workMinutes} min</strong></li><li><i></i><span>Short break</span><strong>${s.shortBreakMinutes} min</strong></li><li><i></i><span>Long break</span><strong>${s.longBreakMinutes} min</strong></li><li><i></i><span>Long break after</span><strong>${s.roundsBeforeLongBreak} rounds</strong></li></ul>
+      <div class="preview-note">${icon("leaf", 15)} This rhythm repeats until your work log goal is reached.</div>
+    </aside>
+  </div>`;
+}
+
+function settingsAppearanceCard() {
+  const s = appState.settings;
+  const familyId = resolveFontFamily(s.fontFamily).id;
+  const styleId = resolveFontStyle(s.fontStyle).id;
+  const sizeId = resolveFontSize(s.fontSize).id;
+  const family = resolveFontFamily(familyId);
+  const usingDefaults = familyId === TYPOGRAPHY_DEFAULTS.fontFamily
+    && styleId === TYPOGRAPHY_DEFAULTS.fontStyle
+    && sizeId === TYPOGRAPHY_DEFAULTS.fontSize;
+  return `<section class="settings-card appearance-card">
+    <div class="settings-heading settings-heading-split">
+      <div>
+        <span class="leaf-kicker">${icon("type", 15)} TYPOGRAPHY</span>
+        <p>Change the type, then use Default if you want the original garden look back.</p>
+      </div>
+      <button type="button" class="button secondary" data-action="restore-typography" ${usingDefaults ? "disabled" : ""}>${icon("reset", 15)} Restore defaults</button>
+    </div>
+    <div class="type-preview" aria-hidden="true">
+      <span class="section-kicker">LIVE PREVIEW</span>
+      <strong style="font-family:${family.display}">Make room to breathe.</strong>
+      <p style="font-family:${family.body}">${family.isDefault
+        ? "Lora for titles, DM Sans for the rest — the type this garden UI is built with. Come back to Default anytime."
+        : `Previewing ${family.name}. The Default badge marks the original Focus Hours pairing (Lora + DM Sans).`}</p>
+    </div>
+    <div class="type-block">
+      <div class="pet-choice-heading"><span>Font family</span></div>
+      <div class="type-family-grid">
+        ${FONT_FAMILY_OPTIONS.map((option) => `<label class="type-family ${familyId === option.id ? "selected" : ""} ${option.isDefault ? "is-default" : ""}">
+          <input type="radio" name="fontFamily" value="${option.id}" ${familyId === option.id ? "checked" : ""}/>
+          <span class="type-family-sample" style="font-family:${option.display}">Aa</span>
+          <strong style="font-family:${option.body}">${option.name}</strong>
+          <small>${option.hint}</small>
+          ${option.isDefault ? '<em class="type-default-badge">Default</em>' : ""}
+        </label>`).join("")}
+      </div>
+    </div>
+    <div class="type-block">
+      <div class="pet-choice-heading"><span>Font style</span></div>
+      <div class="type-choice-row">${FONT_STYLE_OPTIONS.map((option) => typographyChoice("fontStyle", option, styleId)).join("")}</div>
+    </div>
+    <div class="type-block">
+      <div class="pet-choice-heading"><span>Font size</span></div>
+      <div class="type-choice-row">${FONT_SIZE_OPTIONS.map((option) => typographyChoice("fontSize", option, sizeId)).join("")}</div>
     </div>
   </section>`;
 }
@@ -1002,20 +1142,24 @@ function settingsPage() {
         ? settingsIntegrationsCard()
         : settingsSection === "shortcuts"
           ? settingsShortcutsCard()
-          : settingsRhythmCard();
+          : settingsSection === "appearance"
+            ? settingsAppearanceCard()
+            : settingsRhythmCard();
   const showSave = settingsSection !== "shortcuts";
   return shell(`<form id="settings-form" class="settings-shell">
     <aside class="settings-nav" aria-label="Preference sections">
       <span class="settings-nav-kicker">PREFERENCES</span>
       ${settingsNavItem("rhythm", "Focus rhythm", "focus", "Timers, breaks, goal")}
+      ${settingsNavItem("appearance", "Appearance", "type", "Family, style, size")}
       ${settingsNavItem("companion", "Companion", "external", "Buddy & widget")}
       ${settingsNavItem("integrations", "Integrations", "link", "WhatsApp alerts")}
       ${settingsNavItem("data", "Data & backup", "layers", "Export, restore, deleted")}
       ${settingsNavItem("shortcuts", "Shortcuts", "spark", "Global keys")}
+      <div class="settings-nav-home" aria-hidden="true"><img src="assets/potted-plant.png" alt=""/><span>Make room to breathe.</span></div>
     </aside>
-    <div class="settings-panel">
+    <div class="settings-panel ${settingsSection === "rhythm" ? "settings-panel-rhythm" : ""}">
       ${panel}
-      ${showSave ? `<div class="settings-save"><span>Changes are saved only on this device.</span><button class="button primary" type="submit">Save preferences</button></div>` : ""}
+      ${showSave ? `<div class="settings-save"><span>${icon("check", 17)} <strong>Saved locally</strong><em>Preferences stay on this device.</em></span><button class="button primary" type="submit">Save preferences</button></div>` : ""}
     </div>
   </form>`);
 }
@@ -1138,36 +1282,21 @@ function openImportModeModal(preview) {
 }
 
 function aboutPage() {
-  return shell(`<div class="about-layout">
-    <section class="about-hero">
-      <div class="about-product">
-        <span class="about-logo">${icon("clock", 28)}</span>
-        <div><span>FOCUS HOURS</span><h2>A clear record of focused work.</h2><p>Local time tracking for exact work sessions, useful context, and a daily view that stays honest.</p></div>
-      </div>
-      <span class="version-pill">Version ${escapeHtml(appState.appVersion || "1.0.0")}</span>
+  return shell(`<div class="about-layout calm-about">
+    <section class="about-intro">
+      <div><span class="leaf-kicker">${icon("leaf", 15)} About Focus Hours</span><h2>A calm space to do your best work.</h2><p>Focus Hours is a local time tracking tool for real work—quiet by design, respects your time, and helps you build a record you can trust.</p></div>
+      <img src="assets/tea-leaves.png" alt="A warm cup of tea with leaves"/>
     </section>
-    <section class="creator-card">
-      <div class="creator-avatar">SK</div>
-      <div class="creator-copy">
-        <span class="section-kicker">CREATOR</span>
-        <h2>Built by Shashi Kumar Singh</h2>
-        <p>Designed as a practical daily instrument: less ceremony, honest records, and enough structure to understand where the day went.</p>
-      </div>
-      <span class="craft-label">${icon("spark", 15)} Crafted for focused work</span>
+    <section class="how-it-works">
+      <span class="section-kicker">HOW IT WORKS</span>
+      <div class="steps"><article><b>${icon("calendar", 25)}</b><i>1</i><div><h3>Plan</h3><p>Set up tasks or sessions for your day.<br/>Keep it simple and realistic.</p></div></article><span></span><article><b>${icon("play", 27)}</b><i>2</i><div><h3>Focus</h3><p>Start a timer and do your work.<br/>No pressure—just presence.</p></div></article><span></span><article><b>${icon("trend", 27)}</b><i>3</i><div><h3>Review</h3><p>See where your time went.<br/>Learn, adjust, and keep going.</p></div></article></div>
     </section>
-    <section class="about-principles">
-      <article><span>01</span><h3>Your data stays yours</h3><p>Sessions and preferences live on this computer. No account, cloud sync, or hidden telemetry.</p></article>
-      <article><span>02</span><h3>Records over estimates</h3><p>Log exact time ranges, preserve useful context, and edit the ledger when real life interrupts.</p></article>
-      <article><span>03</span><h3>Calm by default</h3><p>The mini timer stays present without demanding attention. The full detail waits in the work log.</p></article>
-    </section>
-    <section class="about-shortcuts">
-      <div><span class="section-kicker">WORK WITHOUT SWITCHING</span><h2>Shortcuts that stay out of the way</h2><p>These work globally while Focus Hours is running.</p></div>
-      ${shortcutList()}
-    </section>
-    <section class="about-footer-card">
-      <div>${icon("about", 20)}<p><strong>Focus Hours ${escapeHtml(appState.appVersion || "1.0.0")}</strong><span>Private desktop time tracking for Windows</span></p></div>
-      <button class="button secondary" data-page="history">${icon("history", 17)} Open work ledger</button>
-    </section>
+    <div class="about-middle-grid">
+      <section class="private-card"><span class="leaf-kicker">${icon("leaf", 15)} PRIVATE BY DESIGN</span><h3>Focus Hours is local-first.</h3><ul><li>${icon("check", 14)} All your data stays on your device</li><li>${icon("check", 14)} No accounts, no cloud sync, no tracking</li><li>${icon("check", 14)} You're in control—always</li></ul><img src="assets/leaf-sprig.png" alt=""/></section>
+      <section class="getting-started"><span class="section-kicker">GETTING STARTED</span><button data-action="manual">${icon("calendar", 16)} Create your first session ${icon("chevron", 15)}</button><button data-page="pomodoro">${icon("focus", 16)} Start a timer ${icon("chevron", 15)}</button><button data-page="history">${icon("note", 16)} Log time and add notes ${icon("chevron", 15)}</button><button data-page="history">${icon("trend", 16)} Review your progress ${icon("chevron", 15)}</button><p>Need a hand? See shortcuts and tips below.</p></section>
+    </div>
+    <section class="about-shortcuts"><span class="section-kicker">SHORTCUTS & TIPS</span>${shortcutList()}</section>
+    <footer class="about-footer">♡ <span>Made with care by Shashi Kumar Singh</span><i></i><span>Version ${escapeHtml(appState.appVersion || "1.0.0")}</span></footer>
   </div>`);
 }
 
@@ -1218,6 +1347,56 @@ function numberField(name, label, value, suffix, { min = 1, max = 180 } = {}) {
 
 function toggleField(name, title, description, checked) {
   return `<label class="toggle-row"><div><strong>${title}</strong><span>${description}</span></div><input type="checkbox" name="${name}" ${checked ? "checked" : ""}/><i></i></label>`;
+}
+
+function typographyChoice(name, option, selectedId) {
+  const selected = option.id === selectedId;
+  return `<label class="type-option type-option-${option.id} ${selected ? "selected" : ""} ${option.isDefault ? "is-default" : ""}">
+    <input type="radio" name="${name}" value="${option.id}" ${selected ? "checked" : ""}/>
+    <strong>${option.name}</strong>
+    <small>${option.hint}</small>
+    ${option.isDefault ? '<em class="type-default-badge">Default</em>' : ""}
+  </label>`;
+}
+
+function resolveFontFamily(id) {
+  return FONT_FAMILY_OPTIONS.find((option) => option.id === id) || FONT_FAMILY_OPTIONS[0];
+}
+
+function resolveFontStyle(id) {
+  return FONT_STYLE_OPTIONS.find((option) => option.id === id) || FONT_STYLE_OPTIONS[0];
+}
+
+function resolveFontSize(id) {
+  return FONT_SIZE_OPTIONS.find((option) => option.id === id) || FONT_SIZE_OPTIONS.find((option) => option.isDefault);
+}
+
+function applyTypography(settings = appState?.settings) {
+  const root = document.documentElement;
+  if (isWidget || !settings) {
+    root.style.removeProperty("--font-body");
+    root.style.removeProperty("--font-display");
+    root.style.removeProperty("--font-style");
+    root.style.removeProperty("--font-weight");
+    root.style.removeProperty("--font-display-weight");
+    root.style.removeProperty("--type-scale");
+    delete root.dataset.fontFamily;
+    delete root.dataset.fontStyle;
+    delete root.dataset.fontSize;
+    return;
+  }
+  const family = resolveFontFamily(settings.fontFamily);
+  const style = resolveFontStyle(settings.fontStyle);
+  const size = resolveFontSize(settings.fontSize);
+  root.style.setProperty("--font-body", family.body);
+  root.style.setProperty("--font-display", family.display);
+  root.style.setProperty("--font-style", style.fontStyle);
+  root.style.setProperty("--font-weight", String(style.weight));
+  root.style.setProperty("--font-display-weight", String(style.displayWeight));
+  root.style.setProperty("--type-scale", String(size.scale));
+  root.dataset.fontFamily = family.id;
+  root.dataset.fontStyle = style.id;
+  root.dataset.fontSize = size.id;
 }
 
 function trackerIsPaused() {
@@ -1470,6 +1649,7 @@ function render(force = false) {
   lastRenderKey = key;
   document.body.classList.toggle("widget-body", isWidget);
   document.documentElement.classList.toggle("widget-html", isWidget);
+  applyTypography(appState.settings);
   if (isWidget) {
     const buddySize = Math.max(BUDDY_SIZE_MIN, Math.min(BUDDY_SIZE_MAX, appState.settings.buddySize || 62));
     document.documentElement.style.setProperty("--buddy-scale", String(buddySize / 62));
@@ -1494,6 +1674,13 @@ function render(force = false) {
   restoreTyping(typing);
   paintFocusRing();
   ensureFocusRingLoop();
+  resizeParkingNote(document.querySelector("#focus-parking"));
+}
+
+function resizeParkingNote(field) {
+  if (!field) return;
+  field.style.height = "auto";
+  field.style.height = `${Math.min(88, Math.max(28, field.scrollHeight))}px`;
 }
 
 function setNotesStatus(message) {
@@ -1667,6 +1854,10 @@ function scheduleMotivationQuote(initial = false) {
     : (25 + Math.random() * 20) * 60_000;
   quoteScheduleTimer = setTimeout(showMotivationQuote, delay);
 }
+
+window.addEventListener("focus-hours-demo-quote", () => {
+  if (isWidget) showMotivationQuote();
+});
 
 async function showMotivationQuote() {
   if (petOpen || petVideoPlaying || motivationQuote || appState.settings.widgetDisplay !== "pet") {
@@ -1912,6 +2103,14 @@ document.addEventListener("click", async (event) => {
     render(true);
     return;
   }
+  const sourceFilterButton = event.target.closest("[data-source-filter]");
+  if (sourceFilterButton) {
+    historySource = sourceFilterButton.dataset.sourceFilter;
+    ledgerPageIndex = 1;
+    lastRenderKey = "";
+    render(true);
+    return;
+  }
   const periodButton = event.target.closest("[data-history-period]");
   if (periodButton) {
     if (!periodButton.disabled && historyPeriodSupportsOffset()) {
@@ -1941,6 +2140,53 @@ document.addEventListener("click", async (event) => {
 
   try {
     if (target.dataset.action === "manual") openManualModal();
+    if (target.dataset.action === "clear-ledger-filters") {
+      selectedRange = "week";
+      historyPeriodOffset = 0;
+      historySearch = "";
+      historySource = "all";
+      ledgerPageIndex = 1;
+      lastRenderKey = "";
+      render(true);
+      showToast("Ledger filters reset");
+    }
+    if (target.dataset.action === "quick-capture") {
+      const capture = document.querySelector("#quick-capture-input");
+      const note = capture?.value.trim();
+      if (note) {
+        const nextNote = `${appState.notepad ? `${appState.notepad.trim()}\n` : ""}• ${note}`.slice(0, NOTEPAD_LIMIT);
+        await api.saveNotepad(nextNote);
+        if (appState) appState.notepad = nextNote;
+        capture.value = "";
+        showToast("Saved for later");
+      }
+    }
+    if (target.dataset.action === "restore-rhythm") {
+      const defaults = { workMinutes: 25, shortBreakMinutes: 5, longBreakMinutes: 15, roundsBeforeLongBreak: 4, dailyGoalHours: 8, autoStartBreaks: false, timerEndSound: true };
+      await api.updateSettings(defaults);
+      showToast("Focus rhythm restored");
+    }
+    if (target.dataset.action === "set-focus-mode") {
+      const mode = FOCUS_MODES.find((item) => item.id === target.dataset.mode);
+      if (!mode) return;
+      if (appState.tracker) {
+        showToast("End this session first, then switch rhythm", "error");
+        return;
+      }
+      if (activeFocusMode() === mode.id) return;
+      await api.updateSettings({
+        workMinutes: mode.workMinutes,
+        shortBreakMinutes: mode.shortBreakMinutes,
+        longBreakMinutes: mode.longBreakMinutes,
+        roundsBeforeLongBreak: mode.roundsBeforeLongBreak
+      });
+      showToast(`${mode.name} · ${mode.workMinutes} / ${mode.shortBreakMinutes} min`);
+    }
+    if (target.dataset.action === "restore-typography") {
+      applyTypography(TYPOGRAPHY_DEFAULTS);
+      await api.updateSettings({ ...TYPOGRAPHY_DEFAULTS });
+      showToast("Typography restored to Focus Hours defaults");
+    }
     if (target.dataset.action === "prepare-data-reset") openDataResetModal();
     if (target.dataset.action === "close-modal") closeModal();
     if (target.dataset.action === "start") {
@@ -2092,6 +2338,11 @@ async function start(kind, taskSelector = "#quick-task", projectSelector = "#qui
 
 document.addEventListener("focusout", (event) => {
   const id = event.target?.id;
+  if (id === "focus-parking") {
+    if (appState) appState.notepad = event.target.value;
+    api.saveNotepad(event.target.value).catch(() => showToast("Could not save your note", "error"));
+    return;
+  }
   if (id === "focus-task" || id === "focus-project") {
     commitFocusDraftFromInputs("#focus-task", "#focus-project");
     return;
@@ -2102,6 +2353,12 @@ document.addEventListener("focusout", (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.id === "focus-parking") {
+    if (appState) appState.notepad = event.target.value;
+    resizeParkingNote(event.target);
+    queueNotepadSave(event.target.value);
+    return;
+  }
   if (event.target.id === "pet-notepad") {
     queueNotepadSave(event.target.value);
     return;
@@ -2139,24 +2396,16 @@ document.addEventListener("input", (event) => {
   }, 180);
 });
 
+document.addEventListener("keydown", (event) => {
+  if (currentPage === "history" && event.ctrlKey && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    const search = document.querySelector("#history-search");
+    search?.focus();
+    search?.select();
+  }
+});
+
 document.addEventListener("change", async (event) => {
-  if (event.target.id === "history-source") {
-    historySource = event.target.value;
-    ledgerPageIndex = 1;
-    lastRenderKey = "";
-    render(true);
-    return;
-  }
-  if (event.target.id === "history-page-size") {
-    const nextSize = Number(event.target.value);
-    if (HISTORY_PAGE_SIZES.includes(nextSize)) {
-      historyPageSize = nextSize;
-      ledgerPageIndex = 1;
-      lastRenderKey = "";
-      render(true);
-    }
-    return;
-  }
   if (event.target.id === "data-period" || event.target.id === "data-from" || event.target.id === "data-to") {
     updateDataControl();
     return;
@@ -2167,6 +2416,21 @@ document.addEventListener("change", async (event) => {
       showToast(event.target.name === "widgetDisplay" ? "Floating style applied" : "Focus buddy changed");
     } catch (error) {
       showToast(error.message || "Could not apply that choice", "error");
+    }
+    return;
+  }
+  if (event.target.name === "fontFamily" || event.target.name === "fontStyle" || event.target.name === "fontSize") {
+    try {
+      applyTypography({ ...appState.settings, [event.target.name]: event.target.value });
+      await api.updateSettings({ [event.target.name]: event.target.value });
+      const label = event.target.name === "fontFamily"
+        ? "Font family applied"
+        : event.target.name === "fontStyle"
+          ? "Font style applied"
+          : "Font size applied";
+      showToast(label);
+    } catch (error) {
+      showToast(error.message || "Could not apply typography", "error");
     }
     return;
   }
@@ -2373,6 +2637,10 @@ document.addEventListener("submit", async (event) => {
         assignNumber("dailyGoalHours");
         if (form.autoStartBreaks) patch.autoStartBreaks = form.autoStartBreaks.checked;
         if (form.timerEndSound) patch.timerEndSound = form.timerEndSound.checked;
+      } else if (settingsSection === "appearance") {
+        if (values.fontFamily) patch.fontFamily = values.fontFamily;
+        if (values.fontStyle) patch.fontStyle = values.fontStyle;
+        if (values.fontSize) patch.fontSize = values.fontSize;
       } else if (settingsSection === "companion") {
         if (values.widgetDisplay) patch.widgetDisplay = values.widgetDisplay;
         if (values.petStyle) patch.petStyle = values.petStyle;
@@ -2398,6 +2666,7 @@ document.addEventListener("submit", async (event) => {
 
 async function init() {
   appState = await api.getState();
+  applyTypography(appState.settings);
   render(true);
   api.onStateChanged((next) => {
     const previousWidgetDisplay = appState?.settings?.widgetDisplay;

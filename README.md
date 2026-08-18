@@ -1,139 +1,60 @@
 ﻿# Focus Hours
 
-A private Windows desktop time tracker with a live timer, Pomodoro sessions, a work ledger, and an always-on-top **Focus Buddy** companion. Everything stays on your device ΓÇö no account, no cloud sync.
+A small Windows app for staying with one task at a time. Start a timer or a Pomodoro, glance at a floating **Focus Buddy** on your desktop, and keep a private log of where the hours went. Nothing leaves your computer — no account, no cloud.
+
+## Demo
+
+A short walkthrough of Today, the work ledger, Pomodoro, and Focus Buddy.
+
+![Focus Hours demo](docs/demo.gif)
+
+[Watch with voiceover (MP4)](docs/demo.mp4)
 
 ## Screenshots
 
-### Focus Buddy
-
-| Expanded panel | Collapsed companion |
+| Today | Focus Buddy |
 |:---:|:---:|
-| ![Expanded Focus Buddy](docs/screenshots/focus-buddy-expanded.png) | ![Collapsed Focus Buddy on the desktop](docs/screenshots/focus-buddy-collapsed.png) |
+| ![Today](docs/screenshots/overview.png) | ![Collapsed Focus Buddy](docs/screenshots/focus-buddy-collapsed.png) |
 
-### Dashboard
-
-| Work ledger | Pomodoro |
+| Expanded buddy | Work ledger |
 |:---:|:---:|
-| ![Work ledger](docs/screenshots/work-ledger.png) | ![Pomodoro focus stage](docs/screenshots/pomodoro.png) |
+| ![Expanded Focus Buddy](docs/screenshots/focus-buddy-expanded.png) | ![Work ledger](docs/screenshots/work-ledger.png) |
 
-| Companion settings |
-|:---:|
-| ![Desktop companion preferences](docs/screenshots/settings-companion.png) |
+| Pomodoro | Companion settings |
+|:---:|:---:|
+| ![Pomodoro](docs/screenshots/pomodoro.png) | ![Companion settings](docs/screenshots/settings-companion.png) |
 
-## Requirements
+Name what you’re working on, start a session, pause from the dashboard or the buddy, and look back over the week in the work ledger. The companion can stay a tiny kitty on the desktop, or open into a panel for the timer, task, and notes.
 
-- **Windows 10 or 11**
-- **[Node.js](https://nodejs.org/)** 18 or newer (LTS recommended)
-- **npm** (ships with Node.js)
+## Setup
 
-Check your versions:
-
-```powershell
-node -v
-npm -v
-```
-
-## Install and run
-
-### 1. Clone the repo
+You need **Windows 10 or 11** and **[Node.js](https://nodejs.org/)** 18 or newer (LTS is fine). npm comes with Node.js.
 
 ```powershell
 git clone https://github.com/shashikrsingh786/focus-hours-desktop.git
 cd focus-hours-desktop
-```
-
-If you already have the folder, skip clone and `cd` into it.
-
-### 2. Install dependencies
-
-```powershell
 npm install
-```
-
-This installs Electron and the Windows build tools used for packaging. The first run can take a minute.
-
-### 3. Start the app
-
-```powershell
 npm start
 ```
 
-Or:
+That opens the Focus Hours window. If the buddy is enabled in Settings, it floats on top of your other apps.
 
-```powershell
-npm run dev
-```
+You can also double-click `Start Focus Hours.cmd` on this machine.
 
-Both launch the same Electron app. You should see:
+Optional: `npm run dist` builds a Windows installer and a portable app in `dist/`.
 
-- the **Focus Hours** dashboard window
-- the floating **Focus Buddy** (if the companion is enabled in Settings)
-
-On some managed Windows devices you can also double-click `Start Focus Hours.cmd`, which starts the app through the local Electron development runtime.
-
-## Build a Windows installer
-
-```powershell
-npm run dist
-```
-
-Installer and portable builds are written to `dist/`.
-
-> Some organization-managed PCs block newly packaged executables (Microsoft Defender ASR). For day-to-day use on those machines, prefer `npm start` or `Start Focus Hours.cmd`. Shipping a public installer usually needs code signing or an IT-approved exclusion.
-
-## Where your data lives
-
-All sessions, preferences, notepad content, and custom buddy images are stored locally in ElectronΓÇÖs per-user app data folder as `focus-hours-data.json`. Nothing is uploaded.
-
-Typical path on Windows:
+Sessions, notes, and buddy pictures stay on your PC:
 
 ```text
 %APPDATA%\focus-hours\focus-hours-data.json
 ```
 
-## Features
+While the app is running: **Ctrl + Alt + Space** starts or stops the timer, **Ctrl + Alt + P** starts a Pomodoro, **Ctrl + Alt + M** shows or hides the buddy.
 
-- **Live tracking** ΓÇö name the task, start a timer, pause or stop anytime
-- **Pomodoro** ΓÇö focus / short break / long break rhythm with automatic history
-- **Manual log** ΓÇö add a past time range after the fact
-- **Work ledger** ΓÇö search, filter, edit, and delete sessions
-- **Focus Buddy** ΓÇö always-on-top companion with built-in or custom pets; click outside the panel to collapse back to the buddy
-- **Offline quotes** ΓÇö occasional companion quotes from a local bundle (no network needed while running)
+## Made with
 
-## Global shortcuts
-
-These work while Focus Hours is running:
-
-| Shortcut | Action |
-| --- | --- |
-| `Ctrl` + `Alt` + `Space` | Start or stop the live timer |
-| `Ctrl` + `Alt` + `P` | Start a Pomodoro |
-| `Ctrl` + `Alt` + `K` | Pause or resume |
-| `Ctrl` + `Alt` + `L` | Log past work |
-| `Ctrl` + `Alt` + `F` | Open the dashboard |
-| `Ctrl` + `Alt` + `M` | Show or hide the companion |
-
-## Project scripts
-
-| Command | What it does |
-| --- | --- |
-| `npm install` | Install dependencies |
-| `npm start` / `npm run dev` | Run the desktop app |
-| `npm run check` | Syntax-check main, preload, and renderer JS |
-| `npm run pack` | Package an unpacked app into `dist/` |
-| `npm run dist` | Build NSIS installer + portable EXE |
-
-## Troubleshooting
-
-**`npm start` fails after clone**  
-Run `npm install` again, then retry. Confirm `node -v` is 18+.
-
-**Companion window missing**  
-Open **Settings ΓåÆ Desktop companion**, ensure launch/visibility is on, or press `Ctrl` + `Alt` + `M`.
-
-**Electron download blocked on corporate network**  
-Retry on a network that allows GitHub/Electron CDN access, or ask IT to allow the Electron download host used by npm.
+The app, screenshots, and demo video were built with **Grok 4.6** in Cursor. The demo voiceover was generated locally with **[Piper](https://github.com/OHF-Voice/piper1-gpl)**.
 
 ## License
 
-MIT ΓÇö see the repository for details.
+MIT

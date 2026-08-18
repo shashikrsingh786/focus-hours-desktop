@@ -35,6 +35,9 @@ const PET_DROP_VIDEO_MAX_BYTES = 40 * 1024 * 1024;
 const DAY_MS = 86_400_000;
 const DELETED_RETENTION_MIN = 1;
 const DELETED_RETENTION_MAX = 30;
+const FONT_FAMILIES = ["focus-hours", "lora", "dm-sans", "inter", "outfit", "georgia", "system"];
+const FONT_STYLES = ["regular", "italic", "medium", "semibold"];
+const FONT_SIZES = ["small", "default", "large", "xl"];
 
 const defaults = {
   sessions: [],
@@ -59,6 +62,9 @@ const defaults = {
     buddySize: 62,
     timerEndSound: true,
     deletedRetentionDays: 2,
+    fontFamily: "focus-hours",
+    fontStyle: "regular",
+    fontSize: "default",
     integrations: {
       whatsapp: null
     }
@@ -445,6 +451,7 @@ function loadState() {
       focusDraft: normalizeFocusDraft(saved.focusDraft)
     };
     loaded.settings.deletedRetentionDays = clampRetentionDays(loaded.settings.deletedRetentionDays);
+    normalizeTypographySettings(loaded.settings);
     return loaded;
   } catch {
     const fresh = structuredClone(defaults);
@@ -459,6 +466,13 @@ function clampRetentionDays(value) {
   const days = Math.round(Number(value));
   if (!Number.isFinite(days)) return defaults.settings.deletedRetentionDays;
   return Math.max(DELETED_RETENTION_MIN, Math.min(DELETED_RETENTION_MAX, days));
+}
+
+function normalizeTypographySettings(settings) {
+  if (!FONT_FAMILIES.includes(settings.fontFamily)) settings.fontFamily = defaults.settings.fontFamily;
+  if (!FONT_STYLES.includes(settings.fontStyle)) settings.fontStyle = defaults.settings.fontStyle;
+  if (!FONT_SIZES.includes(settings.fontSize)) settings.fontSize = defaults.settings.fontSize;
+  return settings;
 }
 
 function retentionMs() {
@@ -798,7 +812,7 @@ function createDashboard() {
     height: 780,
     minWidth: 960,
     minHeight: 650,
-    backgroundColor: "#f6f7fb",
+    backgroundColor: "#f9f7f1",
     title: "Focus Hours",
     show: false,
     webPreferences: {
@@ -1356,6 +1370,7 @@ ipcMain.handle("settings:update", (_event, settings) => {
   next.petDropVideo = typeof next.petDropVideo === "string" ? next.petDropVideo : "";
   next.petDropVideoSound = Boolean(next.petDropVideoSound);
   next.timerEndSound = next.timerEndSound !== false;
+  normalizeTypographySettings(next);
   next.petDropVideoSize = Math.max(
     PET_DROP_VIDEO_SIZE_MIN,
     Math.min(PET_DROP_VIDEO_SIZE_MAX, Math.round(Number(next.petDropVideoSize) || PET_DROP_VIDEO_SIZE_DEFAULT))
