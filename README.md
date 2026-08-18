@@ -6,9 +6,7 @@ A small Windows app for staying with one task at a time. Start a timer or a Pomo
 
 A short walkthrough of Today, the work ledger, Pomodoro, and Focus Buddy.
 
-![Focus Hours demo](docs/demo.gif)
-
-[Watch with voiceover (MP4)](docs/demo.mp4)
+https://go.screenpal.com/watch/cOjFfHnvH27
 
 ## Screenshots
 
