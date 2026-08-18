@@ -22,6 +22,10 @@ https://go.screenpal.com/watch/cOjFfHnvH27
 |:---:|:---:|
 | ![Pomodoro](docs/screenshots/pomodoro.png) | ![Companion settings](docs/screenshots/settings-companion.png) |
 
+| About / Help |
+|:---:|
+| ![About / Help](docs/screenshots/about.png) |
+
 Name what you’re working on, start a session, pause from the dashboard or the buddy, and look back over the week in the work ledger. The companion can stay a tiny kitty on the desktop, or open into a panel for the timer, task, and notes.
 
 ## Setup
